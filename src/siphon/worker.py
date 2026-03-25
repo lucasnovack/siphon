@@ -4,8 +4,6 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
-import pyarrow as pa
-
 from siphon.models import Job
 from siphon.plugins.destinations.base import Destination
 from siphon.plugins.sources.base import Source
@@ -65,7 +63,7 @@ async def run_job(
         job.logs.append(f"Completed: {rows_read} rows read, {rows_written} rows written")
         logger.info("Job %s succeeded: %d rows", job.job_id, rows_read)
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         job.status = "failed"
         job.error = f"Job exceeded timeout of {timeout}s"
         job.logs.append(f"ERROR: {job.error}")
