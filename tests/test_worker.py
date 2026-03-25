@@ -1,7 +1,5 @@
 # tests/test_worker.py
-import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC
 
 import pyarrow as pa
 import pytest
@@ -11,8 +9,8 @@ from siphon.plugins.destinations.base import Destination
 from siphon.plugins.sources.base import Source
 from siphon.worker import run_job
 
-
 # ── Inline stubs ──────────────────────────────────────────────────────────────
+
 
 class _OkSource(Source):
     def extract(self) -> pa.Table:
@@ -27,6 +25,7 @@ class _FailSource(Source):
 class _SlowSource(Source):
     def extract(self) -> pa.Table:
         import time
+
         time.sleep(10)  # will be cancelled by timeout
         return pa.table({"x": []})
 
@@ -37,6 +36,7 @@ class _OkDest(Destination):
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture
 def executor():

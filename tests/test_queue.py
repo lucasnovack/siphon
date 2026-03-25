@@ -11,8 +11,8 @@ from siphon.plugins.destinations.base import Destination
 from siphon.plugins.sources.base import Source
 from siphon.queue import JobQueue
 
-
 # ── Inline stubs ──────────────────────────────────────────────────────────────
+
 
 class _FastSource(Source):
     def extract(self) -> pa.Table:
@@ -46,6 +46,7 @@ def q():
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
+
 
 async def test_submit_accepts_job(q):
     job = Job(job_id="j-ok")
