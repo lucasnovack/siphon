@@ -1,12 +1,10 @@
 # src/siphon/models.py
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
-from datetime import timezone
+from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
-
 
 # ── Credential masking ────────────────────────────────────────────────────────
 
@@ -119,7 +117,7 @@ class Job:
     job_id: str
     status: str = "queued"
     created_at: datetime = field(
-        default_factory=lambda: datetime.now(tz=timezone.utc)  # timezone-aware, not utcnow (deprecated)
+        default_factory=lambda: datetime.now(tz=UTC)
     )
     started_at: datetime | None = None
     finished_at: datetime | None = None
