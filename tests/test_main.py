@@ -6,7 +6,6 @@ Strategy: register fake "sql" and "s3_parquet" plugins at module level so that
 API requests with those types pass validation and route to working stubs.
 Queue state is reset between tests via the `reset_queue` fixture.
 """
-import os
 
 import pyarrow as pa
 import pytest
@@ -21,6 +20,7 @@ from siphon.plugins.sources.base import Source
 # These must be registered before `siphon.main` is imported so the queue is
 # ready to dispatch them.
 
+
 @register_source("sql")
 class _FakeSQLSource(Source):
     def __init__(self, connection: str, query: str, **kwargs) -> None:
@@ -32,7 +32,9 @@ class _FakeSQLSource(Source):
 
 @register_dest("s3_parquet")
 class _FakeS3Dest(Destination):
-    def __init__(self, path: str, endpoint: str, access_key: str, secret_key: str, **kwargs) -> None:
+    def __init__(
+        self, path: str, endpoint: str, access_key: str, secret_key: str, **kwargs
+    ) -> None:
         pass
 
     def write(self, table: pa.Table, is_first_chunk: bool = True) -> int:
@@ -85,6 +87,7 @@ def client():
 
 # ── POST /jobs ────────────────────────────────────────────────────────────────
 
+
 def test_post_jobs_returns_202(client):
     response = client.post("/jobs", json=VALID_REQUEST)
     assert response.status_code == 202
@@ -117,6 +120,7 @@ def test_post_jobs_invalid_source_type_returns_422(client):
 
 # ── POST /extract ─────────────────────────────────────────────────────────────
 
+
 def test_post_extract_returns_200_with_status(client):
     response = client.post("/extract", json=VALID_REQUEST)
     assert response.status_code == 200
@@ -135,6 +139,7 @@ def test_post_extract_429_when_queue_full(client):
 
 # ── GET /jobs/{id} ────────────────────────────────────────────────────────────
 
+
 def test_get_job_returns_status(client):
     post = client.post("/jobs", json=VALID_REQUEST)
     job_id = post.json()["job_id"]
@@ -152,6 +157,7 @@ def test_get_job_404_for_unknown(client):
 
 # ── GET /jobs/{id}/logs ───────────────────────────────────────────────────────
 
+
 def test_get_job_logs_returns_logs_response(client):
     post = client.post("/jobs", json=VALID_REQUEST)
     job_id = post.json()["job_id"]
@@ -168,6 +174,7 @@ def test_get_job_logs_with_since_offset(client):
     job_id = post.json()["job_id"]
     # Wait briefly for job to produce logs
     import time
+
     time.sleep(0.2)
     # Full logs
     full = client.get(f"/jobs/{job_id}/logs?since=0").json()
@@ -185,6 +192,7 @@ def test_get_job_logs_404_for_unknown(client):
 
 # ── GET /health/live ──────────────────────────────────────────────────────────
 
+
 def test_health_live_returns_200(client):
     response = client.get("/health/live")
     assert response.status_code == 200
@@ -192,6 +200,7 @@ def test_health_live_returns_200(client):
 
 
 # ── GET /health/ready ─────────────────────────────────────────────────────────
+
 
 def test_health_ready_returns_200_when_accepting(client):
     response = client.get("/health/ready")
@@ -222,6 +231,7 @@ def test_health_ready_returns_503_when_draining(client):
 
 # ── GET /health ───────────────────────────────────────────────────────────────
 
+
 def test_health_debug_returns_full_info(client):
     response = client.get("/health")
     assert response.status_code == 200
@@ -234,6 +244,7 @@ def test_health_debug_returns_full_info(client):
 
 
 # ── Security: API key middleware ──────────────────────────────────────────────
+
 
 def test_api_key_required_returns_401(client, monkeypatch):
     monkeypatch.setenv("SIPHON_API_KEY", "secret-key")
@@ -280,6 +291,7 @@ def test_health_ready_bypasses_api_key(client):
 
 # ── Security: request size limit ─────────────────────────────────────────────
 
+
 def test_request_too_large_returns_413(client, monkeypatch):
     """SIPHON_MAX_REQUEST_SIZE_MB=0 means any non-empty body is rejected."""
     monkeypatch.setenv("SIPHON_MAX_REQUEST_SIZE_MB", "0")
@@ -288,6 +300,7 @@ def test_request_too_large_returns_413(client, monkeypatch):
 
 
 # ── Security: 422 handler suppresses body ────────────────────────────────────
+
 
 def test_422_does_not_include_raw_body(client):
     """Validation errors must not echo the request body (credentials leak prevention)."""
