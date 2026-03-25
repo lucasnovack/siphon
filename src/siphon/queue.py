@@ -6,10 +6,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import HTTPException
 
+from siphon import worker
 from siphon.models import Job
 from siphon.plugins.destinations.base import Destination
 from siphon.plugins.sources.base import Source
-from siphon import worker
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +116,7 @@ class JobQueue:
         self._draining = True
         logger.info("Draining queue (timeout=%.1fs, active=%d)", timeout, self._active)
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
 
         while self._active > 0:
