@@ -1,10 +1,7 @@
 # tests/test_variables.py
-import os
 from datetime import datetime
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
-
-import pytest
 
 from siphon.variables import resolve
 

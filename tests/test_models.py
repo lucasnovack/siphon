@@ -1,8 +1,8 @@
 # tests/test_models.py
+from datetime import UTC
+
 import pytest
 from pydantic import ValidationError
-
-from datetime import timezone
 
 from siphon.models import (
     ExtractRequest,
@@ -10,8 +10,8 @@ from siphon.models import (
     JobStatus,
     LogsResponse,
     S3ParquetDestinationConfig,
-    SQLSourceConfig,
     SFTPSourceConfig,
+    SQLSourceConfig,
     mask_uri,
 )
 
@@ -124,52 +124,61 @@ class TestS3ParquetDestinationConfig:
 
 class TestExtractRequest:
     def test_discriminated_union_routes_sql(self):
-        req = ExtractRequest.model_validate({
-            "source": {
-                "type": "sql",
-                "connection": "mysql://u:p@h/db",
-                "query": "SELECT 1",
-            },
-            "destination": {
-                "type": "s3_parquet",
-                "path": "s3a://bronze/x/2026-03-25",
-                "endpoint": "minio:9000",
-                "access_key": "k",
-                "secret_key": "s",
-            },
-        })
+        req = ExtractRequest.model_validate(
+            {
+                "source": {
+                    "type": "sql",
+                    "connection": "mysql://u:p@h/db",
+                    "query": "SELECT 1",
+                },
+                "destination": {
+                    "type": "s3_parquet",
+                    "path": "s3a://bronze/x/2026-03-25",
+                    "endpoint": "minio:9000",
+                    "access_key": "k",
+                    "secret_key": "s",
+                },
+            }
+        )
         assert isinstance(req.source, SQLSourceConfig)
 
     def test_discriminated_union_routes_sftp(self):
-        req = ExtractRequest.model_validate({
-            "source": {
-                "type": "sftp",
-                "host": "sftp.internal",
-                "port": 22,
-                "username": "u",
-                "password": "p",
-                "paths": ["/path"],
-                "parser": "example_parser",
-            },
-            "destination": {
-                "type": "s3_parquet",
-                "path": "s3a://bronze/x/2026-03-25",
-                "endpoint": "minio:9000",
-                "access_key": "k",
-                "secret_key": "s",
-            },
-        })
+        req = ExtractRequest.model_validate(
+            {
+                "source": {
+                    "type": "sftp",
+                    "host": "sftp.internal",
+                    "port": 22,
+                    "username": "u",
+                    "password": "p",
+                    "paths": ["/path"],
+                    "parser": "example_parser",
+                },
+                "destination": {
+                    "type": "s3_parquet",
+                    "path": "s3a://bronze/x/2026-03-25",
+                    "endpoint": "minio:9000",
+                    "access_key": "k",
+                    "secret_key": "s",
+                },
+            }
+        )
         assert isinstance(req.source, SFTPSourceConfig)
 
     def test_invalid_source_type_raises(self):
         with pytest.raises(ValidationError):
-            ExtractRequest.model_validate({
-                "source": {"type": "unknown", "connection": "x", "query": "y"},
-                "destination": {
-                    "type": "s3_parquet", "path": "s3a://x",
-                    "endpoint": "e", "access_key": "k", "secret_key": "s",
-                },
-            })
+            ExtractRequest.model_validate(
+                {
+                    "source": {"type": "unknown", "connection": "x", "query": "y"},
+                    "destination": {
+                        "type": "s3_parquet",
+                        "path": "s3a://x",
+                        "endpoint": "e",
+                        "access_key": "k",
+                        "secret_key": "s",
+                    },
+                }
+            )
 
 
 class TestJobStatusModel:
@@ -215,14 +224,16 @@ class TestJob:
         job = Job(job_id="test-456")
         job_fields = {f.name for f in job.__dataclass_fields__.values()}
         sensitive = {"connection", "access_key", "secret_key", "password"}
-        assert not job_fields.intersection(sensitive), \
+        assert not job_fields.intersection(sensitive), (
             f"Job stores sensitive fields: {job_fields.intersection(sensitive)}"
+        )
 
     def test_to_status_returns_job_status(self):
         from datetime import datetime
+
         job = Job(job_id="test-789", status="success", rows_read=10, rows_written=10)
-        job.started_at = datetime.now(tz=timezone.utc)
-        job.finished_at = datetime.now(tz=timezone.utc)
+        job.started_at = datetime.now(tz=UTC)
+        job.finished_at = datetime.now(tz=UTC)
         status = job.to_status()
         assert isinstance(status, JobStatus)
         assert status.job_id == "test-789"
