@@ -291,11 +291,32 @@ def test_request_too_large_returns_413(client, monkeypatch):
 
 def test_422_does_not_include_raw_body(client):
     """Validation errors must not echo the request body (credentials leak prevention)."""
-    bad = {"source": {"type": "sql"}, "destination": {}}  # missing required fields
-    response = client.post("/jobs", json=bad)
+    # Use a request with a sensitive-looking value that would appear in "input" if leaked
+    bad_req = {
+        "source": {
+            "type": "sql",
+            "connection": "mysql://admin:SuperSecret123@prod-db.example.com/mydb",
+            # missing "query" field to trigger validation error
+        },
+        "destination": {
+            "type": "s3_parquet",
+            "path": "s3a://bronze/x",
+            "endpoint": "minio:9000",
+            "access_key": "k",
+            "secret_key": "s",
+        },
+    }
+    response = client.post("/jobs", json=bad_req)
     assert response.status_code == 422
     body = response.json()
-    # The response should have 'detail' but NOT the raw request body
+    response_text = str(body)
+    # The password must NOT appear anywhere in the response
+    assert "SuperSecret123" not in response_text
+    assert "admin" not in response_text
+    # Errors should still provide useful information (type, loc, msg)
     assert "detail" in body
-    # Raw body values should not appear in response
-    assert "sql" not in str(body.get("body", ""))
+    errors = body.get("errors", [])
+    assert len(errors) > 0
+    # No error dict should have an "input" key
+    for err in errors:
+        assert "input" not in err, f"Error dict leaks input data: {err}"
