@@ -82,9 +82,13 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     FastAPI's default handler includes the full parsed body in the response and logs it,
     which would expose connection strings, passwords, and S3 keys in error logs.
     """
+    # Strip "input" from each error to prevent credential leakage.
+    # Pydantic v2 includes the parsed field value in "input" which can contain
+    # connection strings, passwords, and S3 keys verbatim.
+    safe_errors = [{k: v for k, v in err.items() if k != "input"} for err in exc.errors()]
     return JSONResponse(
         status_code=422,
-        content={"detail": "Request validation failed", "errors": exc.errors()},
+        content={"detail": "Request validation failed", "errors": safe_errors},
     )
 
 
