@@ -59,6 +59,9 @@ async def run_job(
         )
         job.rows_read = rows_read
         job.rows_written = rows_written
+        # Collect failed files from sources that support partial success (e.g. SFTPSource)
+        failed_files = list(getattr(source, "failed_files", []))
+        job.failed_files = failed_files
         if rows_read != rows_written:
             job.status = "failed"
             job.error = (
@@ -70,9 +73,18 @@ async def run_job(
                 job.job_id, rows_read, rows_written,
             )
             return
-        job.status = "success"
-        job.logs.append(f"Completed: {rows_read} rows read, {rows_written} rows written")
-        logger.info("Job %s succeeded: %d rows", job.job_id, rows_read)
+        if failed_files:
+            job.status = "partial_success"
+            job.logs.append(
+                f"Partial success: {rows_read} rows written, {len(failed_files)} files failed"
+            )
+            logger.warning(
+                "Job %s partial success: %d files failed", job.job_id, len(failed_files)
+            )
+        else:
+            job.status = "success"
+            job.logs.append(f"Completed: {rows_read} rows read, {rows_written} rows written")
+            logger.info("Job %s succeeded: %d rows", job.job_id, rows_read)
 
     except TimeoutError:
         job.status = "failed"

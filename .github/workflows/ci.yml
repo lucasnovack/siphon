@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+
+  test-unit:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv run pytest
+          --ignore=tests/test_integration_sql.py
+          --ignore=tests/test_integration_s3.py
+          --ignore=tests/test_integration_sftp.py
+          -v
+
+  docker:
+    name: Docker Build + Smoke Test + Trivy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: siphon:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test — /health/live
+        run: |
+          docker run --rm -d -p 8000:8000 --name siphon-smoke siphon:ci
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:8000/health/live && break
+            sleep 1
+          done
+          curl -sf http://localhost:8000/health/live
+          docker stop siphon-smoke
+
+      - name: Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: siphon:ci
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+
+  test-integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Start services
+        run: docker compose -f docker-compose.test.yml up -d --wait
+
+      - name: Wait for MySQL
+        run: |
+          for i in $(seq 1 30); do
+            docker compose -f docker-compose.test.yml exec -T mysql \
+              mysqladmin ping -h localhost -usiphon -psiphon --silent && break
+            sleep 2
+          done
+
+      - name: Run integration tests
+        run: |
+          uv run pytest \
+            tests/test_integration_sql.py \
+            tests/test_integration_s3.py \
+            tests/test_integration_sftp.py \
+            -m integration -v
+        env:
+          SIPHON_ALLOWED_S3_PREFIX: "bronze/"
+          SIPHON_S3_SCHEME: "http"
+
+      - name: Stop services
+        if: always()
+        run: docker compose -f docker-compose.test.yml down -v

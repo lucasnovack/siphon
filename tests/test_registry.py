@@ -111,3 +111,11 @@ class TestAutodiscovery:
         import siphon.plugins.destinations as m
 
         importlib.reload(m)  # should not raise
+
+    def test_autodiscovery_parsers_does_not_crash_on_reimport(self):
+        """Re-importing the parsers registry module should be idempotent."""
+        import importlib
+
+        import siphon.plugins.parsers as m
+
+        importlib.reload(m)  # should not raise
