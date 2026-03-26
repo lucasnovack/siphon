@@ -103,3 +103,11 @@ class TestAutodiscovery:
         import siphon.plugins.sources as m
 
         importlib.reload(m)  # should not raise
+
+    def test_autodiscovery_destinations_does_not_crash_on_reimport(self):
+        """Re-importing the destinations registry module should be idempotent."""
+        import importlib
+
+        import siphon.plugins.destinations as m
+
+        importlib.reload(m)  # should not raise

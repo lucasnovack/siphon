@@ -1,6 +1,7 @@
 # src/siphon/plugins/destinations/__init__.py
 import importlib
 import pkgutil
+import sys
 from pathlib import Path
 
 from siphon.plugins.destinations.base import Destination
@@ -30,7 +31,9 @@ def _autodiscover() -> None:
     package_dir = Path(__file__).parent
     for _, module_name, _ in pkgutil.iter_modules([str(package_dir)]):
         if module_name != "base":
-            importlib.import_module(f"{__name__}.{module_name}")
+            full_name = f"{__name__}.{module_name}"
+            sys.modules.pop(full_name, None)
+            importlib.import_module(full_name)
 
 
 _autodiscover()
