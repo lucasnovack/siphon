@@ -121,20 +121,37 @@ def test_post_jobs_invalid_source_type_returns_422(client):
 # ── POST /extract ─────────────────────────────────────────────────────────────
 
 
-def test_post_extract_returns_200_with_status(client):
-    response = client.post("/extract", json=VALID_REQUEST)
-    assert response.status_code == 200
-    body = response.json()
-    assert body["status"] in ("success", "failed", "running", "queued")
-    assert "job_id" in body
+def test_post_extract_returns_200_with_status(client, monkeypatch):
+    monkeypatch.setenv("SIPHON_ENABLE_SYNC_EXTRACT", "true")
+    main_module.ENABLE_SYNC_EXTRACT = True
+    try:
+        response = client.post("/extract", json=VALID_REQUEST)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] in ("success", "failed", "running", "queued")
+        assert "job_id" in body
+    finally:
+        main_module.ENABLE_SYNC_EXTRACT = False
 
 
-def test_post_extract_429_when_queue_full(client):
-    q = main_module.queue
-    q._active = q._max_workers
-    q._queued = q._max_queue
+def test_post_extract_429_when_queue_full(client, monkeypatch):
+    monkeypatch.setenv("SIPHON_ENABLE_SYNC_EXTRACT", "true")
+    main_module.ENABLE_SYNC_EXTRACT = True
+    try:
+        q = main_module.queue
+        q._active = q._max_workers
+        q._queued = q._max_queue
+        response = client.post("/extract", json=VALID_REQUEST)
+        assert response.status_code == 429
+    finally:
+        main_module.ENABLE_SYNC_EXTRACT = False
+
+
+def test_post_extract_disabled_by_default(client):
+    """POST /extract returns 404 unless SIPHON_ENABLE_SYNC_EXTRACT=true."""
+    main_module.ENABLE_SYNC_EXTRACT = False
     response = client.post("/extract", json=VALID_REQUEST)
-    assert response.status_code == 429
+    assert response.status_code == 404
 
 
 # ── GET /jobs/{id} ────────────────────────────────────────────────────────────
