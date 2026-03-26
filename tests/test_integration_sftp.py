@@ -5,6 +5,7 @@ Requires atmoz/sftp container from docker-compose.yml:
 Run with:
     pytest tests/test_integration_sftp.py -m integration
 """
+
 import pytest
 
 pytestmark = pytest.mark.integration
@@ -20,6 +21,7 @@ SFTP_PATH = "/upload"
 def sftp_available():
     try:
         import paramiko
+
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         ssh.connect(SFTP_HOST, port=SFTP_PORT, username=SFTP_USER, password=SFTP_PASS, timeout=3)
@@ -53,9 +55,12 @@ def test_sftp_extract_stub_files(sftp_available):
 
     cls = get_source("sftp")
     src = cls(
-        host=SFTP_HOST, port=SFTP_PORT,
-        username=SFTP_USER, password=SFTP_PASS,
-        paths=[SFTP_PATH], parser="example_parser",
+        host=SFTP_HOST,
+        port=SFTP_PORT,
+        username=SFTP_USER,
+        password=SFTP_PASS,
+        paths=[SFTP_PATH],
+        parser="example_parser",
     )
 
     # Override _single_connection to use AutoAddPolicy for test
