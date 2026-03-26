@@ -134,7 +134,9 @@ class SFTPSource(Source):
                 if size > _MAX_FILE_SIZE_BYTES:
                     logger.warning(
                         "Skipping %s (%d MB exceeds %d MB limit)",
-                        filename, size // (1024 * 1024), _MAX_FILE_SIZE_MB,
+                        filename,
+                        size // (1024 * 1024),
+                        _MAX_FILE_SIZE_MB,
                     )
                     continue
                 result.append(f"{remote_dir.rstrip('/')}/{filename}")
@@ -184,7 +186,10 @@ class SFTPSource(Source):
                     raise
                 logger.warning(
                     "Download attempt %d/%d failed for %s: %s",
-                    attempt + 1, max_retries, path, exc,
+                    attempt + 1,
+                    max_retries,
+                    path,
+                    exc,
                 )
                 time.sleep(delay)
                 delay = min(delay * 2, 30.0)

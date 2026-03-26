@@ -8,8 +8,9 @@ Requires the services in docker-compose.yml to be running:
 Run with:
     pytest tests/test_integration_sql.py -m integration
 """
-import pytest
+
 import pyarrow as pa
+import pytest
 
 from siphon.plugins.sources import get as get_source
 

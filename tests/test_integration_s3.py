@@ -7,13 +7,12 @@ Requires docker-compose services to be running:
 Run with:
     pytest tests/test_integration_s3.py -m integration
 """
-import asyncio
+
 import time
 import uuid
 
 import pyarrow as pa
 import pyarrow.fs as pafs
-import pyarrow.parquet as pq
 import pytest
 
 pytestmark = pytest.mark.integration
@@ -46,6 +45,7 @@ def mysql_available():
     """Skip if MySQL is not reachable."""
     try:
         import connectorx as cx
+
         cx.read_sql(MYSQL_CONN, "SELECT 1", return_type="arrow")
     except Exception as exc:
         pytest.skip(f"MySQL not available: {exc}")
@@ -53,8 +53,9 @@ def mysql_available():
 
 def test_write_and_read_back_parquet(minio_fs):
     """Write an Arrow Table to MinIO as Parquet and read it back."""
-    import siphon.plugins.destinations.s3_parquet as mod
     from unittest.mock import patch
+
+    import siphon.plugins.destinations.s3_parquet as mod
 
     path = f"s3a://{MINIO_BUCKET}/integration_test/{uuid.uuid4().hex}"
     table = pa.table({"id": [1, 2, 3], "name": ["a", "b", "c"]})
@@ -68,12 +69,15 @@ def test_write_and_read_back_parquet(minio_fs):
             secret_key=MINIO_SECRET_KEY,
         )
 
-        with patch("pyarrow.fs.S3FileSystem", return_value=pafs.S3FileSystem(
-            endpoint_override=MINIO_ENDPOINT,
-            access_key=MINIO_ACCESS_KEY,
-            secret_key=MINIO_SECRET_KEY,
-            scheme="http",
-        )):
+        with patch(
+            "pyarrow.fs.S3FileSystem",
+            return_value=pafs.S3FileSystem(
+                endpoint_override=MINIO_ENDPOINT,
+                access_key=MINIO_ACCESS_KEY,
+                secret_key=MINIO_SECRET_KEY,
+                scheme="http",
+            ),
+        ):
             rows = dest.write(table, is_first_chunk=True)
 
     assert rows == 3

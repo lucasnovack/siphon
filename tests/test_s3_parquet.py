@@ -1,12 +1,13 @@
+from unittest.mock import MagicMock, patch
+
 import pyarrow as pa
 import pytest
-from unittest.mock import MagicMock, patch
 
 from siphon.plugins.destinations import get as get_destination
 from siphon.plugins.destinations.s3_parquet import _validate_path
 
-
 # ── Registry ──────────────────────────────────────────────────────────────────
+
 
 def test_s3_parquet_is_registered():
     cls = get_destination("s3_parquet")
@@ -14,6 +15,7 @@ def test_s3_parquet_is_registered():
 
 
 # ── Path validation ───────────────────────────────────────────────────────────
+
 
 def test_validate_path_allows_valid_s3a():
     _validate_path("s3a://bronze/entity/2026-03-25")  # should not raise
@@ -35,6 +37,7 @@ def test_validate_path_rejects_outside_prefix():
 
 def test_validate_path_custom_prefix():
     import siphon.plugins.destinations.s3_parquet as mod
+
     # Use mod._validate_path to ensure we target the live module after any reload.
     with patch.object(mod, "_ALLOWED_PREFIX", "data/"):
         mod._validate_path("s3a://data/entity/2026-03-25")  # should not raise
@@ -55,6 +58,7 @@ def test_validate_path_called_in_init():
 
 
 # ── write() behavior ──────────────────────────────────────────────────────────
+
 
 def _make_dest(**kwargs):
     cls = get_destination("s3_parquet")
@@ -133,6 +137,7 @@ def test_write_passes_compression():
 
 # ── SIPHON_S3_SCHEME ──────────────────────────────────────────────────────────
 
+
 def test_s3_scheme_defaults_to_https():
     table = pa.table({"x": [1]})
     dest = _make_dest()
@@ -144,6 +149,7 @@ def test_s3_scheme_defaults_to_https():
     ):
         mock_fs_cls.return_value = MagicMock()
         import os
+
         os.environ.pop("SIPHON_S3_SCHEME", None)
         dest.write(table)
 
@@ -169,13 +175,15 @@ def test_s3_scheme_configurable(monkeypatch):
 
 # ── rows_read != rows_written → job fails ─────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_row_mismatch_fails_job():
     """Worker must mark job as failed when destination returns fewer rows than read."""
     from concurrent.futures import ThreadPoolExecutor
+
     from siphon.models import Job
-    from siphon.plugins.sources.base import Source
     from siphon.plugins.destinations.base import Destination
+    from siphon.plugins.sources.base import Source
     from siphon.worker import run_job
 
     class _Source(Source):
