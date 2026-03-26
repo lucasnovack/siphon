@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 # ── Credential masking ────────────────────────────────────────────────────────
 
+
 def mask_uri(uri: str) -> str:
     """Replace user:password in a connection URI with ***.
 
@@ -21,6 +22,7 @@ def mask_uri(uri: str) -> str:
 
 
 # ── Source configs ────────────────────────────────────────────────────────────
+
 
 class SQLSourceConfig(BaseModel):
     type: Literal["sql"]
@@ -60,6 +62,7 @@ class SFTPSourceConfig(BaseModel):
 
 
 # ── Destination configs ───────────────────────────────────────────────────────
+
 
 class S3ParquetDestinationConfig(BaseModel):
     type: Literal["s3_parquet"]
@@ -111,14 +114,14 @@ class LogsResponse(BaseModel):
 
 # ── Internal Job dataclass (no credentials stored) ────────────────────────────
 
+
 @dataclass
 class Job:
     """Internal job state. Never stores connection strings, passwords, or keys."""
+
     job_id: str
     status: str = "queued"
-    created_at: datetime = field(
-        default_factory=lambda: datetime.now(tz=UTC)
-    )
+    created_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
     started_at: datetime | None = None
     finished_at: datetime | None = None
     rows_read: int | None = None
@@ -131,9 +134,7 @@ class Job:
         """Convert internal Job to API-facing JobStatus."""
         duration_ms = None
         if self.started_at and self.finished_at:
-            duration_ms = int(
-                (self.finished_at - self.started_at).total_seconds() * 1000
-            )
+            duration_ms = int((self.finished_at - self.started_at).total_seconds() * 1000)
         return JobStatus(
             job_id=self.job_id,
             status=self.status,

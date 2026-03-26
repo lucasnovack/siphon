@@ -35,6 +35,7 @@ packages = ["src/siphon"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = ["integration: requires external services (docker-compose)"]
 
 [tool.ruff]
 line-length = 100
