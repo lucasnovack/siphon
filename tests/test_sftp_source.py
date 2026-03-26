@@ -192,6 +192,69 @@ class TestMoveHelpers:
         sftp.rename.assert_called_once_with("/proc/file1.bin", "/done/file1.bin")
 
 
+class TestMoveBackToOrigin:
+    def test_failed_file_moved_back_when_processing_folder_set(self):
+        """When processing_folder is set and a file fails, it must be moved back to origin."""
+        sftp = MagicMock()
+        sftp.listdir_attr.return_value = [
+            _make_sftp_entry("good.bin"),
+            _make_sftp_entry("bad.bin"),
+        ]
+
+        good_fh = MagicMock()
+        good_fh.__enter__ = MagicMock(return_value=good_fh)
+        good_fh.__exit__ = MagicMock(return_value=False)
+        good_fh.read.return_value = b"ok"
+
+        call_count = {"n": 0}
+
+        def open_side_effect(path, mode):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return good_fh
+            raise IOError("parse failure")
+
+        sftp.open.side_effect = open_side_effect
+
+        src = _make_source(
+            fail_fast=False,
+            processing_folder="/processing",
+        )
+        _mock_sftp_source(src, sftp)
+
+        list(src.extract_batches())
+
+        # bad.bin was in /processing/bad.bin after the initial move.
+        # On failure it must be renamed back to /data/bad.bin.
+        rename_calls = [str(c) for c in sftp.rename.call_args_list]
+        move_back = any(
+            "processing/bad.bin" in c and "/data/bad.bin" in c
+            for c in rename_calls
+        )
+        assert move_back, (
+            f"Expected rename from /processing/bad.bin to /data/bad.bin. "
+            f"Actual rename calls: {rename_calls}"
+        )
+
+        # bad.bin must still appear in failed_files
+        assert any("bad.bin" in f for f in src.failed_files)
+
+    def test_no_move_back_when_no_processing_folder(self):
+        """Without processing_folder, no rename-back should happen on failure."""
+        sftp = MagicMock()
+        sftp.listdir_attr.return_value = [_make_sftp_entry("bad.bin")]
+        sftp.open.side_effect = IOError("boom")
+
+        src = _make_source(fail_fast=False)  # no processing_folder
+        _mock_sftp_source(src, sftp)
+
+        list(src.extract_batches())
+
+        # rename should never have been called (no processing_folder)
+        sftp.rename.assert_not_called()
+        assert any("bad.bin" in f for f in src.failed_files)
+
+
 # ── chunking ──────────────────────────────────────────────────────────────────
 
 
