@@ -226,15 +226,7 @@ class TestMoveBackToOrigin:
 
         # bad.bin was in /processing/bad.bin after the initial move.
         # On failure it must be renamed back to /data/bad.bin.
-        rename_calls = [str(c) for c in sftp.rename.call_args_list]
-        move_back = any(
-            "processing/bad.bin" in c and "/data/bad.bin" in c
-            for c in rename_calls
-        )
-        assert move_back, (
-            f"Expected rename from /processing/bad.bin to /data/bad.bin. "
-            f"Actual rename calls: {rename_calls}"
-        )
+        sftp.rename.assert_any_call("/processing/bad.bin", "/data/bad.bin")
 
         # bad.bin must still appear in failed_files
         assert any("bad.bin" in f for f in src.failed_files)
