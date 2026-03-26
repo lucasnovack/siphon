@@ -186,8 +186,6 @@ async def test_evict_expired_removes_old_completed_jobs():
 
 async def test_evict_expired_keeps_running_jobs():
     """Running jobs are never evicted regardless of age."""
-    from datetime import UTC, datetime, timedelta
-
     q = JobQueue(max_workers=1, max_queue=0, job_timeout=5, job_ttl=60)
     q.start()
 
