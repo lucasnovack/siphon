@@ -56,6 +56,7 @@ class SFTPSource(Source):
         self.processed_folder = processed_folder
         self._parser = get_parser(parser)()
         self.failed_files: list[str] = []
+        self._origin_map: dict[str, str] = {}
 
     def extract(self) -> pa.Table:
         tables = list(self.extract_batches(chunk_size=self.max_files))
@@ -65,6 +66,7 @@ class SFTPSource(Source):
 
     def extract_batches(self, chunk_size: int = 100) -> Iterator[pa.Table]:
         self.failed_files = []
+        self._origin_map = {}
         with self._single_connection() as sftp:
             files = self._list_and_filter(sftp)
             logger.info("Found %d files to process across %d paths", len(files), len(self.paths))
@@ -162,7 +164,7 @@ class SFTPSource(Source):
         origin = self._origin_map.get(path, path)
         try:
             sftp.rename(path, origin)
-            logger.info("Moved failed file back to origin: %s → %s", path, origin)
+            logger.info("Moved failed file back to origin: %s -> %s", path, origin)
         except Exception as exc:
             logger.error(
                 "Could not move %s back to origin %s: %s — file may need manual recovery",
