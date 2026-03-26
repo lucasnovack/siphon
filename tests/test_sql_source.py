@@ -1,11 +1,12 @@
+from unittest.mock import patch
+
 import pyarrow as pa
 import pytest
-from unittest.mock import MagicMock, patch
 
 from siphon.plugins.sources import get as get_source
 
-
 # ── Registry ──────────────────────────────────────────────────────────────────
+
 
 def test_sql_source_is_registered():
     cls = get_source("sql")
@@ -13,6 +14,7 @@ def test_sql_source_is_registered():
 
 
 # ── ConnectorX path ───────────────────────────────────────────────────────────
+
 
 def test_extract_connectorx_passes_partition_args():
     """partition_on/num/range are forwarded to cx.read_sql."""
@@ -55,6 +57,7 @@ def test_extract_connectorx_no_partition():
 
 # ── Variable resolution ───────────────────────────────────────────────────────
 
+
 def test_variable_resolution_applied_before_query():
     """variables.resolve() is called on the raw query before passing to cx.read_sql."""
     table = pa.table({"dt": ["2026-03-25"]})
@@ -74,6 +77,7 @@ def test_variable_resolution_applied_before_query():
 
 
 # ── Host validation ───────────────────────────────────────────────────────────
+
 
 def test_host_validation_rejects_disallowed_host():
     """Connection is rejected when host is not in SIPHON_ALLOWED_HOSTS."""

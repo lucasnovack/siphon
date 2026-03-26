@@ -3,6 +3,7 @@ import asyncio
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 
 from fastapi import HTTPException
 
@@ -29,10 +30,12 @@ class JobQueue:
         max_workers: int = int(os.getenv("SIPHON_MAX_WORKERS", "10")),
         max_queue: int = int(os.getenv("SIPHON_MAX_QUEUE", "50")),
         job_timeout: int = int(os.getenv("SIPHON_JOB_TIMEOUT", "3600")),
+        job_ttl: int = int(os.getenv("SIPHON_JOB_TTL_SECONDS", "3600")),
     ) -> None:
         self._max_workers = max_workers
         self._max_queue = max_queue
         self._job_timeout = job_timeout
+        self._job_ttl = job_ttl
         self._executor: ThreadPoolExecutor | None = None
         self._jobs: dict[str, Job] = {}
         self._active: int = 0
@@ -43,10 +46,12 @@ class JobQueue:
     def start(self) -> None:
         """Start the thread pool. Call once at service startup."""
         self._executor = ThreadPoolExecutor(max_workers=self._max_workers)
+        asyncio.ensure_future(self._evict_loop())
         logger.info(
-            "JobQueue started: max_workers=%d, max_queue=%d",
+            "JobQueue started: max_workers=%d, max_queue=%d, job_ttl=%ds",
             self._max_workers,
             self._max_queue,
+            self._job_ttl,
         )
 
     @property
@@ -72,6 +77,28 @@ class JobQueue:
     def get_job(self, job_id: str) -> Job | None:
         """Retrieve job state by ID. Returns None if not found."""
         return self._jobs.get(job_id)
+
+    def _evict_expired(self) -> None:
+        """Remove terminal jobs whose finished_at is older than job_ttl. Called by _evict_loop."""
+        now = datetime.now(tz=UTC)
+        terminal = ("success", "failed", "partial_success")
+        to_remove = [
+            jid
+            for jid, job in list(self._jobs.items())
+            if job.status in terminal
+            and job.finished_at is not None
+            and (now - job.finished_at).total_seconds() > self._job_ttl
+        ]
+        for jid in to_remove:
+            del self._jobs[jid]
+        if to_remove:
+            logger.debug("Evicted %d expired job(s) from memory", len(to_remove))
+
+    async def _evict_loop(self) -> None:
+        """Background coroutine: evict expired jobs every 5 minutes until draining."""
+        while not self._draining:
+            await asyncio.sleep(300)
+            self._evict_expired()
 
     async def submit(self, job: Job, source: Source, destination: Destination) -> None:
         """Submit a job for execution.

@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 # ── Config (module-level for API key; read per-request for size limit) ────────
 API_KEY: str | None = os.getenv("SIPHON_API_KEY")
 DRAIN_TIMEOUT = int(os.getenv("SIPHON_DRAIN_TIMEOUT", "3600"))
+ENABLE_SYNC_EXTRACT: bool = os.getenv("SIPHON_ENABLE_SYNC_EXTRACT", "false").lower() == "true"
 
 # ── Startup warnings ──────────────────────────────────────────────────────────
 if not os.getenv("SIPHON_API_KEY"):
@@ -130,9 +131,13 @@ async def create_job(req: ExtractRequest) -> dict:
 async def extract_sync(req: ExtractRequest) -> dict:
     """Synchronous extraction — blocks until job completes. For local dev and debug only.
 
+    Disabled by default. Set SIPHON_ENABLE_SYNC_EXTRACT=true to enable.
     Do NOT use from Airflow in production — HTTP connections open for minutes are fragile.
     Use POST /jobs + polling instead.
     """
+    if not ENABLE_SYNC_EXTRACT:
+        raise HTTPException(status_code=404, detail="Not Found")
+
     import asyncio
 
     job, source, destination = _make_job_and_plugins(req)
