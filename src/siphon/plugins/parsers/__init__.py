@@ -10,9 +10,11 @@ _REGISTRY: dict[str, type[Parser]] = {}
 
 def register(name: str):
     """Decorator to register a Parser plugin under a given name."""
+
     def decorator(cls: type[Parser]) -> type[Parser]:
         _REGISTRY[name] = cls
         return cls
+
     return decorator
 
 

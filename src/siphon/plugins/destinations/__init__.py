@@ -10,9 +10,11 @@ _REGISTRY: dict[str, type[Destination]] = {}
 
 def register(name: str):
     """Decorator to register a Destination plugin under a given name."""
+
     def decorator(cls: type[Destination]) -> type[Destination]:
         _REGISTRY[name] = cls
         return cls
+
     return decorator
 
 
