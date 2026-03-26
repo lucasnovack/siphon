@@ -84,6 +84,8 @@ class SFTPSource(Source):
                         if self.fail_fast:
                             raise
                         logger.warning("Failed to process %s: %s", f, exc)
+                        if self.processing_folder:
+                            self._move_back_to_origin(sftp, f)
                         self.failed_files.append(f)
                 if tables:
                     yield pa.concat_tables(tables)
@@ -140,18 +142,34 @@ class SFTPSource(Source):
         return result
 
     def _move_to_processing(self, sftp, files: list[str]) -> list[str]:
+        self._origin_map: dict[str, str] = {}
         new_paths = []
         for path in files:
             filename = os.path.basename(path)
             new_path = f"{self.processing_folder.rstrip('/')}/{filename}"
             sftp.rename(path, new_path)
             new_paths.append(new_path)
+            self._origin_map[new_path] = path
         return new_paths
 
     def _move_to_processed(self, sftp, path: str) -> None:
         filename = os.path.basename(path)
         new_path = f"{self.processed_folder.rstrip('/')}/{filename}"
         sftp.rename(path, new_path)
+
+    def _move_back_to_origin(self, sftp, path: str) -> None:
+        """Move a failed file from processing_folder back to its origin path."""
+        origin = self._origin_map.get(path, path)
+        try:
+            sftp.rename(path, origin)
+            logger.info("Moved failed file back to origin: %s → %s", path, origin)
+        except Exception as exc:
+            logger.error(
+                "Could not move %s back to origin %s: %s — file may need manual recovery",
+                path,
+                origin,
+                exc,
+            )
 
     def _download_with_retry(self, sftp, path: str, max_retries: int = 3) -> bytes:
         delay = 1.0
