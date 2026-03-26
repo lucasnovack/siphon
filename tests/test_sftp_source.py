@@ -1,5 +1,6 @@
 # tests/test_sftp_source.py
 """Unit tests for SFTPSource — no real network connections."""
+
 import stat as stat_mod
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
@@ -9,7 +10,6 @@ import pytest
 
 from siphon.plugins.parsers import get as get_parser
 from siphon.plugins.sources import get as get_source
-
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -25,8 +25,12 @@ def _make_sftp_entry(filename: str, size: int = 100, is_dir: bool = False):
 def _make_source(**kwargs):
     cls = get_source("sftp")
     defaults = dict(
-        host="sftp.test", port=22, username="u", password="p",
-        paths=["/data"], parser="example_parser",
+        host="sftp.test",
+        port=22,
+        username="u",
+        password="p",
+        paths=["/data"],
+        parser="example_parser",
     )
     defaults.update(kwargs)
     return cls(**defaults)
@@ -34,9 +38,11 @@ def _make_source(**kwargs):
 
 def _mock_sftp_source(source, sftp_mock):
     """Patch _single_connection on instance to yield sftp_mock."""
+
     @contextmanager
     def fake_conn():
         yield sftp_mock
+
     source._single_connection = fake_conn
     return source
 
@@ -146,7 +152,7 @@ class TestFailFast:
             call_count["n"] += 1
             if call_count["n"] == 1:
                 return good_fh
-            raise IOError("connection reset")
+            raise OSError("connection reset")
 
         sftp.open.side_effect = open_side_effect
 
@@ -164,7 +170,7 @@ class TestFailFast:
         sftp.listdir_attr.return_value = [
             _make_sftp_entry("bad.bin"),
         ]
-        sftp.open.side_effect = IOError("connection reset")
+        sftp.open.side_effect = OSError("connection reset")
 
         src = _make_source(fail_fast=True)
         _mock_sftp_source(src, sftp)
@@ -190,6 +196,61 @@ class TestMoveHelpers:
         src = _make_source(processed_folder="/done")
         src._move_to_processed(sftp, "/proc/file1.bin")
         sftp.rename.assert_called_once_with("/proc/file1.bin", "/done/file1.bin")
+
+
+class TestMoveBackToOrigin:
+    def test_failed_file_moved_back_when_processing_folder_set(self):
+        """When processing_folder is set and a file fails, it must be moved back to origin."""
+        sftp = MagicMock()
+        sftp.listdir_attr.return_value = [
+            _make_sftp_entry("good.bin"),
+            _make_sftp_entry("bad.bin"),
+        ]
+
+        good_fh = MagicMock()
+        good_fh.__enter__ = MagicMock(return_value=good_fh)
+        good_fh.__exit__ = MagicMock(return_value=False)
+        good_fh.read.return_value = b"ok"
+
+        call_count = {"n": 0}
+
+        def open_side_effect(path, mode):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return good_fh
+            raise OSError("parse failure")
+
+        sftp.open.side_effect = open_side_effect
+
+        src = _make_source(
+            fail_fast=False,
+            processing_folder="/processing",
+        )
+        _mock_sftp_source(src, sftp)
+
+        list(src.extract_batches())
+
+        # bad.bin was in /processing/bad.bin after the initial move.
+        # On failure it must be renamed back to /data/bad.bin.
+        sftp.rename.assert_any_call("/processing/bad.bin", "/data/bad.bin")
+
+        # bad.bin must still appear in failed_files
+        assert any("bad.bin" in f for f in src.failed_files)
+
+    def test_no_move_back_when_no_processing_folder(self):
+        """Without processing_folder, no rename-back should happen on failure."""
+        sftp = MagicMock()
+        sftp.listdir_attr.return_value = [_make_sftp_entry("bad.bin")]
+        sftp.open.side_effect = OSError("boom")
+
+        src = _make_source(fail_fast=False)  # no processing_folder
+        _mock_sftp_source(src, sftp)
+
+        list(src.extract_batches())
+
+        # rename should never have been called (no processing_folder)
+        sftp.rename.assert_not_called()
+        assert any("bad.bin" in f for f in src.failed_files)
 
 
 # ── chunking ──────────────────────────────────────────────────────────────────
@@ -236,7 +297,7 @@ class TestRetry:
         def open_side_effect(path, mode):
             call_count["n"] += 1
             if call_count["n"] < 3:
-                raise IOError("transient")
+                raise OSError("transient")
             return good_fh
 
         sftp.open.side_effect = open_side_effect

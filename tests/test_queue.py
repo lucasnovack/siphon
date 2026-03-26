@@ -164,3 +164,36 @@ async def test_drain_timeout_marks_running_jobs_failed():
     assert "shutdown" in job.error.lower()
     gate.set()  # unblock thread so it can exit cleanly
     q._executor.shutdown(wait=False)
+
+
+async def test_evict_expired_removes_old_completed_jobs():
+    """Completed jobs older than TTL are removed from _jobs."""
+    from datetime import UTC, datetime, timedelta
+
+    q = JobQueue(max_workers=1, max_queue=0, job_timeout=5, job_ttl=60)
+    q.start()
+
+    # Manually plant a completed job with a finished_at in the past
+    old_job = Job(job_id="j-old")
+    old_job.status = "success"
+    old_job.finished_at = datetime.now(tz=UTC) - timedelta(seconds=120)
+    q._jobs["j-old"] = old_job
+
+    q._evict_expired()
+
+    assert q.get_job("j-old") is None
+
+
+async def test_evict_expired_keeps_running_jobs():
+    """Running jobs are never evicted regardless of age."""
+    q = JobQueue(max_workers=1, max_queue=0, job_timeout=5, job_ttl=60)
+    q.start()
+
+    running_job = Job(job_id="j-running")
+    running_job.status = "running"
+    running_job.finished_at = None
+    q._jobs["j-running"] = running_job
+
+    q._evict_expired()
+
+    assert q.get_job("j-running") is running_job
