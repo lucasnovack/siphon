@@ -39,9 +39,7 @@ class S3ParquetDestination(Destination):
         )
         root_path = self.path.replace("s3a://", "").replace("s3://", "")
         behavior = "delete_matching" if is_first_chunk else "overwrite_or_ignore"
-        logger.info(
-            "Writing %d rows to %s (behavior=%s)", table.num_rows, self.path, behavior
-        )
+        logger.info("Writing %d rows to %s (behavior=%s)", table.num_rows, self.path, behavior)
         pq.write_to_dataset(
             table,
             root_path=root_path,

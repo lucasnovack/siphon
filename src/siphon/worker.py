@@ -64,13 +64,13 @@ async def run_job(
         job.failed_files = failed_files
         if rows_read != rows_written:
             job.status = "failed"
-            job.error = (
-                f"Row count mismatch: {rows_read} rows read but {rows_written} rows written"
-            )
+            job.error = f"Row count mismatch: {rows_read} rows read but {rows_written} rows written"
             job.logs.append(f"ERROR: {job.error}")
             logger.error(
                 "Job %s row count mismatch: read=%d written=%d",
-                job.job_id, rows_read, rows_written,
+                job.job_id,
+                rows_read,
+                rows_written,
             )
             return
         if failed_files:
@@ -78,9 +78,7 @@ async def run_job(
             job.logs.append(
                 f"Partial success: {rows_read} rows written, {len(failed_files)} files failed"
             )
-            logger.warning(
-                "Job %s partial success: %d files failed", job.job_id, len(failed_files)
-            )
+            logger.warning("Job %s partial success: %d files failed", job.job_id, len(failed_files))
         else:
             job.status = "success"
             job.logs.append(f"Completed: {rows_read} rows read, {rows_written} rows written")
