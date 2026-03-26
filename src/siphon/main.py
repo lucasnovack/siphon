@@ -50,6 +50,7 @@ logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
 
 # ── Middleware ────────────────────────────────────────────────────────────────
 
+
 @app.middleware("http")
 async def api_key_middleware(request: Request, call_next):
     """Require Authorization: Bearer <SIPHON_API_KEY> on all routes except health probes."""
@@ -75,6 +76,7 @@ async def request_size_limit(request: Request, call_next):
 
 # ── Exception handlers ────────────────────────────────────────────────────────
 
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Override FastAPI's default 422 handler to never log or echo the request body.
@@ -93,6 +95,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _make_job_and_plugins(req: ExtractRequest) -> tuple[Job, object, object]:
     """Resolve plugin classes from the registry and instantiate them.
@@ -113,6 +116,7 @@ def _make_job_and_plugins(req: ExtractRequest) -> tuple[Job, object, object]:
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
+
 
 @app.post("/jobs", status_code=202)
 async def create_job(req: ExtractRequest) -> dict:
@@ -222,6 +226,7 @@ async def health_debug() -> dict:
 
 
 # ── Reserved endpoints (deferred to v1.1) ────────────────────────────────────
+
 
 @app.get("/metrics")
 async def metrics_reserved() -> dict:

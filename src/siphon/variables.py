@@ -28,8 +28,7 @@ def resolve(query: str) -> str:
     next_month = now + relativedelta(months=1)
 
     return (
-        query
-        .replace("@TODAY", now.strftime("'%Y-%m-%d'"))
+        query.replace("@TODAY", now.strftime("'%Y-%m-%d'"))
         .replace("@MIN_DATE", f"'{_MIN_DATE}'")
         .replace("@LAST_MONTH", last_month.strftime("'%Y-%m-01'"))
         .replace("@NEXT_MONTH", next_month.strftime("'%Y-%m-01'"))
