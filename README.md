@@ -22,6 +22,7 @@ Source (SQL / SFTP)  →  Siphon  →  S3 / MinIO (Parquet)
 
 - [Quick Start](#quick-start)
 - [Architecture](#architecture)
+- [Authentication](#authentication)
 - [API Reference](#api-reference)
 - [Configuration](#configuration)
 - [Pipeline Examples](#pipeline-examples)
@@ -40,9 +41,9 @@ Source (SQL / SFTP)  →  Siphon  →  S3 / MinIO (Parquet)
 # Run with Docker Compose (includes MySQL + MinIO)
 docker compose up -d
 
-# Submit an extraction job
+# Option A: authenticate with SIPHON_API_KEY (legacy / Airflow)
 curl -s -X POST http://localhost:8000/jobs \
-  -H "X-API-Key: changeme" \
+  -H "Authorization: Bearer changeme" \
   -H "Content-Type: application/json" \
   -d '{
     "source": {
@@ -61,8 +62,18 @@ curl -s -X POST http://localhost:8000/jobs \
   }'
 # → {"job_id": "3f2a..."}
 
+# Option B: authenticate with JWT (human / UI)
+TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@example.com","password":"secret"}' | jq -r .access_token)
+
+curl -s -X POST http://localhost:8000/jobs \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d @job.json
+
 # Poll until done
-curl -s http://localhost:8000/jobs/3f2a... -H "X-API-Key: changeme"
+curl -s http://localhost:8000/jobs/3f2a... -H "Authorization: Bearer changeme"
 # → {"status": "success", "rows_read": 42000, "rows_written": 42000}
 ```
 
@@ -71,19 +82,23 @@ curl -s http://localhost:8000/jobs/3f2a... -H "X-API-Key: changeme"
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                    FastAPI App                       │
-│                                                      │
-│  POST /jobs ──► asyncio Queue ──► ThreadPoolExecutor │
-│                                         │            │
-│                               Worker loop per job    │
-│                                         │            │
-│                                source.extract_batches()
-│                                         │            │
-│                         (optional) parser.parse()    │
-│                                         │            │
-│                          destination.write(batch)    │
-└─────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                        FastAPI App                            │
+│                                                               │
+│  get_current_principal ── API key OR JWT access token         │
+│                                                               │
+│  POST /jobs ──► asyncio Queue ──► ThreadPoolExecutor          │
+│                                          │                    │
+│                                Worker loop per job            │
+│                                          │                    │
+│                               source.extract_batches()        │
+│                                          │                    │
+│                          (optional) parser.parse()            │
+│                                          │                    │
+│                           destination.write(batch)            │
+│                                          │                    │
+│                        _persist_job_run() → PostgreSQL        │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 **Key design decisions:**
@@ -95,9 +110,44 @@ curl -s http://localhost:8000/jobs/3f2a... -H "X-API-Key: changeme"
 
 ---
 
+## Authentication
+
+Siphon supports two auth methods via the `Authorization: Bearer <token>` header:
+
+| Method | Token | Use case |
+|---|---|---|
+| **API key** | `SIPHON_API_KEY` value | Airflow service accounts, scripts |
+| **JWT** | Access token from `POST /api/v1/auth/login` | Human users, UI |
+
+Both methods use the same header — Siphon auto-detects which one is being used. Health probes (`/health/live`, `/health/ready`) are always public.
+
+### Getting a JWT token
+
+```bash
+# Login
+curl -s -X POST http://localhost:8000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "admin@example.com", "password": "secret"}'
+# → {"access_token": "eyJ...", "token_type": "bearer"}
+# A refresh token cookie is also set (httpOnly, 7-day TTL)
+
+# Refresh access token (uses the cookie automatically)
+curl -s -X POST http://localhost:8000/api/v1/auth/refresh \
+  --cookie-jar cookies.txt --cookie cookies.txt
+
+# Logout
+curl -s -X POST http://localhost:8000/api/v1/auth/logout \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token": "<token>"}'
+```
+
+Access tokens expire after 15 minutes. Use `POST /api/v1/auth/refresh` to rotate. Presenting a revoked refresh token invalidates **all** sessions for that user (reuse detection).
+
+---
+
 ## API Reference
 
-All endpoints require the `X-API-Key` header (set via `SIPHON_API_KEY`).
+All endpoints require `Authorization: Bearer <token>` (API key or JWT access token).
 
 ### `POST /jobs`
 
@@ -105,7 +155,7 @@ Submit an async extraction job.
 
 ```bash
 curl -X POST http://localhost:8000/jobs \
-  -H "X-API-Key: $SIPHON_API_KEY" \
+  -H "Authorization: Bearer $SIPHON_API_KEY" \
   -H "Content-Type: application/json" \
   -d @job.json
 ```
@@ -131,7 +181,7 @@ Synchronous extraction — blocks until the job completes. Same request body as 
 Poll a job's status.
 
 ```bash
-curl http://localhost:8000/jobs/3f2a... -H "X-API-Key: $SIPHON_API_KEY"
+curl http://localhost:8000/jobs/3f2a... -H "Authorization: Bearer $SIPHON_API_KEY"
 ```
 
 ```json
@@ -157,7 +207,7 @@ curl http://localhost:8000/jobs/3f2a... -H "X-API-Key: $SIPHON_API_KEY"
 Stream logs for a specific job.
 
 ```bash
-curl http://localhost:8000/jobs/3f2a.../logs -H "X-API-Key: $SIPHON_API_KEY"
+curl http://localhost:8000/jobs/3f2a.../logs -H "Authorization: Bearer $SIPHON_API_KEY"
 ```
 
 ```json
@@ -190,12 +240,16 @@ Readiness probe. Returns `503` when the queue is full.
 
 All configuration is via environment variables.
 
+**Core**
+
 | Variable | Default | Description |
 |---|---|---|
-| `SIPHON_API_KEY` | `changeme` | API key required in `X-API-Key` header |
+| `SIPHON_API_KEY` | *(unset)* | Legacy API key — sent as `Authorization: Bearer <value>`. If unset, API key auth is disabled. |
 | `SIPHON_PORT` | `8000` | HTTP port |
-| `SIPHON_MAX_WORKERS` | `4` | ThreadPoolExecutor max workers |
-| `SIPHON_MAX_QUEUE_SIZE` | `100` | Max pending jobs before 429 |
+| `SIPHON_MAX_WORKERS` | `10` | ThreadPoolExecutor max workers |
+| `SIPHON_MAX_QUEUE` | `50` | Max pending jobs before 429 |
+| `SIPHON_JOB_TIMEOUT` | `3600` | Per-job timeout in seconds |
+| `SIPHON_JOB_TTL_SECONDS` | `3600` | How long to keep finished jobs in memory |
 | `SIPHON_MAX_REQUEST_SIZE_MB` | `1` | Request body size limit (MB) |
 | `SIPHON_ALLOWED_HOSTS` | *(empty = all allowed)* | Comma-separated hostnames or CIDR blocks for SSRF guard |
 | `SIPHON_ALLOWED_S3_PREFIX` | *(empty = all allowed)* | Required path prefix for S3 writes (e.g. `bronze/`) |
@@ -203,6 +257,17 @@ All configuration is via environment variables.
 | `SIPHON_MAX_FILE_SIZE_MB` | `500` | Max SFTP file size to download |
 | `SIPHON_SFTP_KNOWN_HOSTS` | *(empty)* | Path to SSH known_hosts file |
 | `SIPHON_SFTP_HOST_KEY` | *(empty)* | Base64-encoded host public key (alternative to known_hosts) |
+| `SIPHON_ENABLE_SYNC_EXTRACT` | `false` | Enable `POST /extract` (dev/debug only) |
+| `SIPHON_DRAIN_TIMEOUT` | `3600` | Seconds to wait for active jobs on SIGTERM |
+
+**PostgreSQL + Auth** *(Phase 8)*
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATABASE_URL` | *(unset)* | PostgreSQL async URL, e.g. `postgresql+asyncpg://user:pass@host/db`. If unset, DB features return 503. |
+| `SIPHON_JWT_SECRET` | *(dev fallback — insecure)* | HMAC secret for signing JWT tokens. **Always set in production.** |
+| `SIPHON_ADMIN_EMAIL` | *(unset)* | Bootstrap admin email. Only used on first startup when no users exist. |
+| `SIPHON_ADMIN_PASSWORD` | *(unset)* | Bootstrap admin password (bcrypt-hashed at startup). |
 
 ---
 
@@ -326,7 +391,7 @@ With `fail_fast: false`, if some files fail (network error, parse error), the jo
 
 ### Airflow DAG integration
 
-Use the `SiphonOperator` (Fase 8, coming soon) or call the API directly with `SimpleHttpOperator`:
+Call the API directly with `SimpleHttpOperator`, or use the `SiphonOperator` (Fase 12, coming soon):
 
 ```python
 from datetime import datetime
@@ -347,7 +412,7 @@ with DAG(
         http_conn_id="siphon_default",   # Connection: host=http://siphon:8000
         endpoint="/jobs",
         method="POST",
-        headers={"X-API-Key": "{{ var.value.siphon_api_key }}", "Content-Type": "application/json"},
+        headers={"Authorization": "Bearer {{ var.value.siphon_api_key }}", "Content-Type": "application/json"},
         data=json.dumps({
             "source": {
                 "type": "sql",
@@ -371,7 +436,7 @@ with DAG(
         task_id="wait_for_completion",
         http_conn_id="siphon_default",
         endpoint="/jobs/{{ ti.xcom_pull(task_ids='submit_extraction') }}",
-        headers={"X-API-Key": "{{ var.value.siphon_api_key }}"},
+        headers={"Authorization": "Bearer {{ var.value.siphon_api_key }}"},
         response_check=lambda r: r.json()["status"] in ("success", "partial_success", "failed"),
         poke_interval=15,
         timeout=3600,
@@ -518,7 +583,12 @@ class MyDestination(Destination):
 
 | Threat | Mitigation |
 |---|---|
-| Unauthorized access | `X-API-Key` header required on all endpoints |
+| Unauthorized access | `Authorization: Bearer` required on all endpoints (API key or JWT) |
+| Compromised JWT secret | Startup warning if `SIPHON_JWT_SECRET` is unset; 15-min access token TTL limits blast radius |
+| Refresh token theft | Only SHA-256 hash stored in DB; raw token only in httpOnly cookie |
+| Session hijacking | Token rotation on every refresh; reuse detection revokes all sessions |
+| Brute-force login | slowapi rate limit: 10 requests/min per IP on `POST /api/v1/auth/login` |
+| Inactive account access | `is_active` checked at login and on every JWT-authenticated request |
 | Credential leakage in logs | `mask_uri()` applied to all connection strings before logging; 422 errors never log the request body |
 | SSRF via SQL connection | `_validate_host()` checks against `SIPHON_ALLOWED_HOSTS` (CIDR + hostname allowlist) |
 | Path traversal in S3 writes | `_validate_path()` rejects `..` and paths outside `SIPHON_ALLOWED_S3_PREFIX` |
@@ -642,16 +712,26 @@ docker compose up
 
 ```
 src/siphon/
-├── main.py                    # FastAPI app, routes, middleware
+├── main.py                    # FastAPI app, routes, middleware, admin bootstrap
 ├── queue.py                   # Asyncio job queue + ThreadPoolExecutor
-├── worker.py                  # Extraction loop: source → parser → destination
+├── worker.py                  # Extraction loop: source → parser → destination → job_runs
 ├── models.py                  # Pydantic models, mask_uri
 ├── variables.py               # @TODAY, @LAST_MONTH, etc.
+├── orm.py                     # SQLAlchemy ORM models (User, RefreshToken, Connection, Pipeline, Schedule, JobRun)
+├── db.py                      # Async engine, session factory, get_db dependency
+├── auth/
+│   ├── __init__.py
+│   ├── deps.py                # Principal + get_current_principal dual-auth dependency
+│   ├── jwt_utils.py           # JWT create/decode, refresh token, bcrypt helpers
+│   └── router.py              # POST /login, /refresh, /logout, GET /me
+├── users/
+│   ├── __init__.py
+│   └── router.py              # Admin-only CRUD: GET/POST/PUT/DELETE /api/v1/users
 └── plugins/
     ├── sources/
     │   ├── base.py            # Source ABC
     │   ├── __init__.py        # Registry + autodiscovery
-    │   └── sql.py             # SQLSource (ConnectorX + oracledb)
+    │   ├── sql.py             # SQLSource (ConnectorX + oracledb)
     │   └── sftp.py            # SFTPSource (Paramiko)
     ├── destinations/
     │   ├── base.py            # Destination ABC
@@ -661,6 +741,11 @@ src/siphon/
         ├── base.py            # Parser ABC
         ├── __init__.py        # Registry + autodiscovery
         └── example_parser.py  # Stub: bytes → pa.Table with raw column
+
+alembic/
+├── env.py                     # Async migration runner
+└── versions/
+    └── 001_initial_schema.py  # Creates all 6 tables
 ```
 
 ---
