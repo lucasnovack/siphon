@@ -1,9 +1,10 @@
 # src/siphon/users/router.py
 import uuid
 from datetime import UTC, datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,14 +27,14 @@ class UserResponse(BaseModel):
 
 class CreateUserRequest(BaseModel):
     email: str
-    password: str
-    role: str = "operator"
+    password: str = Field(min_length=8)
+    role: Literal["admin", "operator"] = "operator"
 
 
 class UpdateUserRequest(BaseModel):
-    role: str | None = None
+    role: Literal["admin", "operator"] | None = None
     is_active: bool | None = None
-    password: str | None = None
+    password: str | None = Field(default=None, min_length=8)
 
 
 def _to_response(user: User) -> UserResponse:
