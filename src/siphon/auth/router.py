@@ -1,6 +1,5 @@
 # src/siphon/auth/router.py
 import hashlib
-import os
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -72,7 +71,7 @@ async def login(
         httponly=True,
         secure=True,
         samesite="strict",
-        path="/api/v1/auth",
+        path="/api/v1/auth/refresh",
         max_age=_REFRESH_MAX_AGE,
     )
     return response
@@ -141,19 +140,24 @@ async def refresh_token(
         httponly=True,
         secure=True,
         samesite="strict",
-        path="/api/v1/auth",
+        path="/api/v1/auth/refresh",
         max_age=_REFRESH_MAX_AGE,
     )
     return response
 
 
+class LogoutRequest(BaseModel):
+    refresh_token: str | None = None
+
+
 @router.post("/logout")
 async def logout(
     request: Request,
+    body: LogoutRequest | None = None,
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ) -> dict:
-    """Revoke the current refresh token cookie."""
-    token_str = request.cookies.get("refresh_token")
+    """Revoke the current refresh token. Token can be in request body or cookie."""
+    token_str = (body.refresh_token if body else None) or request.cookies.get("refresh_token")
     if token_str:
         token_hash = hashlib.sha256(token_str.encode()).hexdigest()
         result = await db.execute(
