@@ -2,6 +2,7 @@ import ipaddress
 import logging
 import os
 from collections.abc import Iterator
+from datetime import datetime
 from urllib.parse import parse_qs, urlparse, urlunparse
 
 import connectorx as cx
@@ -16,6 +17,32 @@ logger = logging.getLogger(__name__)
 
 _CONNECT_TIMEOUT = int(os.getenv("SIPHON_CONNECT_TIMEOUT", "30"))
 _ALLOWED_HOSTS = os.getenv("SIPHON_ALLOWED_HOSTS", "")
+_ORACLE_CHUNK_SIZE = int(os.getenv("SIPHON_ORACLE_CHUNK_SIZE", "50000"))
+
+
+def _oracle_rows_to_arrow(rows: list, description) -> pa.Table:
+    columns = [col[0].lower() for col in description]
+    arrays = {col: [row[i] for row in rows] for i, col in enumerate(columns)}
+    return pa.Table.from_pydict(arrays)
+
+
+def _oracle_output_type_handler(cursor, name, default_type, size, precision, scale):
+    import oracledb
+
+    if default_type == oracledb.DB_TYPE_NUMBER:
+        if scale == 0:
+            return cursor.var(int, arraysize=cursor.arraysize)
+        return cursor.var(float, arraysize=cursor.arraysize)
+    if default_type in (oracledb.DB_TYPE_DATE, oracledb.DB_TYPE_TIMESTAMP):
+        return cursor.var(datetime, arraysize=cursor.arraysize)
+    if default_type == oracledb.DB_TYPE_CLOB:
+        logger.warning(
+            "CLOB column '%s' detected — large values may cause memory spikes within a chunk",
+            name,
+        )
+        return cursor.var(str, arraysize=cursor.arraysize)
+    if default_type == oracledb.DB_TYPE_BLOB:
+        return cursor.var(bytes, arraysize=cursor.arraysize)
 
 
 @register("sql")
@@ -40,14 +67,20 @@ class SQLSource(Source):
 
         if self.connection.startswith("oracle"):
             logger.info("Extracting Oracle from %s", mask_uri(self.connection))
-            return self._extract_oracle(query)
+            return pa.concat_tables(list(self._extract_oracle_batches(query)))
 
         conn = _inject_timeout(self.connection)
         logger.info("Extracting from %s", mask_uri(conn))
         return self._extract_connectorx(conn, query)
 
-    def extract_batches(self, chunk_size: int = 100) -> Iterator[pa.Table]:
-        yield self.extract()
+    def extract_batches(self, chunk_size: int = _ORACLE_CHUNK_SIZE) -> Iterator[pa.Table]:
+        _validate_host(self.connection)
+        query = variables.resolve(self.query)
+
+        if self.connection.startswith("oracle"):
+            yield from self._extract_oracle_batches(query, chunk_size)
+        else:
+            yield self._extract_connectorx(_inject_timeout(self.connection), query)
 
     def _extract_connectorx(self, conn: str, query: str) -> pa.Table:
         kwargs: dict = {"return_type": "arrow"}
@@ -59,20 +92,26 @@ class SQLSource(Source):
             kwargs["partition_range"] = self.partition_range
         return cx.read_sql(conn, query, **kwargs)
 
-    def _extract_oracle(self, query: str) -> pa.Table:  # pragma: no cover
+    def _extract_oracle_batches(
+        self, query: str, chunk_size: int = _ORACLE_CHUNK_SIZE
+    ) -> Iterator[pa.Table]:
         import oracledb
-        import pandas as pd
+
+        if self.partition_on is not None or self.partition_num is not None:
+            logger.warning(
+                "Oracle partition_on/partition_num are not supported in streaming mode and will be ignored. "
+                "Parallel Oracle partitioning is planned for a future phase."
+            )
 
         conn = oracledb.connect(dsn=self._oracle_dsn(), tcp_connect_timeout=_CONNECT_TIMEOUT)
-        if self.partition_num and self.partition_num > 1:
-            chunks = pd.read_sql(query, conn, chunksize=100_000)
-            return pa.concat_tables(
-                [pa.Table.from_pandas(chunk, preserve_index=False) for chunk in chunks]
-            )
-        df = pd.read_sql(query, conn)
-        return pa.Table.from_pandas(df, preserve_index=False)
+        conn.outputtypehandler = _oracle_output_type_handler
+        with conn, conn.cursor() as cursor:
+            cursor.arraysize = chunk_size
+            cursor.execute(query)
+            while rows := cursor.fetchmany(chunk_size):
+                yield _oracle_rows_to_arrow(rows, cursor.description)
 
-    def _oracle_dsn(self) -> str:  # pragma: no cover
+    def _oracle_dsn(self) -> str:
         """Parse oracle+oracledb://user:pass@host:1521/service → user/pass@host:1521/service."""
         parsed = urlparse(self.connection)
         service = parsed.path.lstrip("/")
