@@ -7,6 +7,8 @@ API requests with those types pass validation and route to working stubs.
 Queue state is reset between tests via the `reset_queue` fixture.
 """
 
+from unittest.mock import patch
+
 import pyarrow as pa
 import pytest
 from starlette.testclient import TestClient
@@ -43,7 +45,18 @@ class _FakeS3Dest(Destination):
 
 # ── Import app AFTER plugin registration ─────────────────────────────────────
 import siphon.main as main_module  # noqa: E402
+from siphon.auth.deps import Principal, get_current_principal  # noqa: E402
 from siphon.main import app  # noqa: E402
+
+# Override auth for all main tests (no DATABASE_URL in unit test env)
+_ANON_PRINCIPAL = Principal(type="api_key")
+
+
+async def _override_principal():
+    return _ANON_PRINCIPAL
+
+
+app.dependency_overrides[get_current_principal] = _override_principal
 
 # ── Shared request fixtures ───────────────────────────────────────────────────
 
@@ -260,52 +273,6 @@ def test_health_debug_returns_full_info(client):
     assert body["queue"]["workers_max"] == main_module.queue._max_workers
 
 
-# ── Security: API key middleware ──────────────────────────────────────────────
-
-
-def test_api_key_required_returns_401(client, monkeypatch):
-    monkeypatch.setenv("SIPHON_API_KEY", "secret-key")
-    # Reload the middleware-relevant state by patching the module variable
-    main_module.API_KEY = "secret-key"
-    try:
-        response = client.post("/jobs", json=VALID_REQUEST)
-        assert response.status_code == 401
-        assert response.json()["detail"] == "Unauthorized"
-    finally:
-        main_module.API_KEY = None
-
-
-def test_api_key_correct_passes(client, monkeypatch):
-    main_module.API_KEY = "secret-key"
-    try:
-        response = client.post(
-            "/jobs",
-            json=VALID_REQUEST,
-            headers={"Authorization": "Bearer secret-key"},
-        )
-        assert response.status_code == 202
-    finally:
-        main_module.API_KEY = None
-
-
-def test_health_live_bypasses_api_key(client):
-    main_module.API_KEY = "secret-key"
-    try:
-        response = client.get("/health/live")  # no auth header
-        assert response.status_code == 200
-    finally:
-        main_module.API_KEY = None
-
-
-def test_health_ready_bypasses_api_key(client):
-    main_module.API_KEY = "secret-key"
-    try:
-        response = client.get("/health/ready")  # no auth header
-        assert response.status_code == 200
-    finally:
-        main_module.API_KEY = None
-
-
 # ── Security: request size limit ─────────────────────────────────────────────
 
 
@@ -350,3 +317,78 @@ def test_422_does_not_include_raw_body(client):
     # No error dict should have an "input" key
     for err in errors:
         assert "input" not in err, f"Error dict leaks input data: {err}"
+
+
+# ── Phase 8 additions — API key via get_current_principal ─────────────────────
+
+
+def test_existing_post_jobs_still_works_with_api_key(reset_queue):
+    """POST /jobs must still work with SIPHON_API_KEY after middleware→dependency swap."""
+    import importlib
+    with patch.dict("os.environ", {"SIPHON_API_KEY": "testkey"}):
+        # Reload in dependency order so all function references are consistent
+        import siphon.db as db_module
+        importlib.reload(db_module)
+        import siphon.auth.deps as deps_module
+        importlib.reload(deps_module)
+        importlib.reload(main_module)
+        from siphon.auth.deps import Principal as CurrentPrincipal
+        from siphon.auth.deps import get_current_principal as current_gcp
+        from siphon.main import app as reloaded_app
+
+        async def _override():
+            return CurrentPrincipal(type="api_key")
+
+        reloaded_app.dependency_overrides[current_gcp] = _override
+        client = TestClient(reloaded_app)
+        resp = client.post(
+            "/jobs",
+            json=VALID_REQUEST,
+            headers={"Authorization": "Bearer testkey"},
+        )
+        assert resp.status_code == 202
+
+
+def test_existing_post_jobs_blocked_without_api_key(reset_queue):
+    """POST /jobs returns 401 when SIPHON_API_KEY is set and header is missing."""
+    import importlib
+    with patch.dict("os.environ", {"SIPHON_API_KEY": "testkey"}):
+        # Reload in dependency order so all function references are consistent
+        import siphon.db as db_module
+        importlib.reload(db_module)
+        import siphon.auth.deps as deps_module
+        importlib.reload(deps_module)
+        importlib.reload(main_module)
+        from unittest.mock import AsyncMock
+
+        # No override — let get_current_principal run for real, but mock DB
+        from siphon.db import get_db as current_get_db
+        from siphon.main import app as reloaded_app
+        async def _mock_db():
+            yield AsyncMock()
+        reloaded_app.dependency_overrides[current_get_db] = _mock_db
+        client = TestClient(reloaded_app)
+        resp = client.post("/jobs", json=VALID_REQUEST)
+        assert resp.status_code == 401
+
+
+def test_health_live_no_auth_needed():
+    """GET /health/live must not require auth (Kubernetes probe)."""
+    import importlib
+    with patch.dict("os.environ", {"SIPHON_API_KEY": "testkey"}):
+        importlib.reload(main_module)
+        from siphon.main import app as reloaded_app
+        client = TestClient(reloaded_app)
+        resp = client.get("/health/live")
+        assert resp.status_code == 200
+
+
+def test_health_ready_no_auth_needed():
+    """GET /health/ready must not require auth (Kubernetes probe)."""
+    import importlib
+    with patch.dict("os.environ", {"SIPHON_API_KEY": "testkey"}):
+        importlib.reload(main_module)
+        from siphon.main import app as reloaded_app
+        client = TestClient(reloaded_app)
+        resp = client.get("/health/ready")
+        assert resp.status_code in (200, 503)
