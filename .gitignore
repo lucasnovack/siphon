@@ -9,3 +9,5 @@ dist/
 .env
 .superpowers/
 .worktrees/
+docs/superpowers/
+memory/
