@@ -196,7 +196,7 @@ async def test_row_mismatch_fails_job():
 
     with ThreadPoolExecutor(max_workers=1) as ex:
         job = Job(job_id="j-mismatch")
-        await run_job(job, _Source(), _ShortDest(), ex, timeout=5)
+        await run_job(_Source(), _ShortDest(), job, ex, timeout=5)
 
     assert job.status == "failed"
     assert "mismatch" in job.error.lower()

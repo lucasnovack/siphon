@@ -130,7 +130,8 @@ class JobQueue:
         self._queued -= 1
         self._active += 1
         try:
-            await worker.run_job(job, source, destination, self._executor, self._job_timeout)
+            from siphon.db import get_session_factory
+            await worker.run_job(source, destination, job, self._executor, self._job_timeout, db_factory=get_session_factory())
         finally:
             self._active -= 1
 
