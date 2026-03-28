@@ -16,11 +16,6 @@ def _sync_extract_and_write(
     source: Source,
     destination: Destination,
 ) -> tuple[int, int]:
-    """Synchronous extraction loop — runs in a ThreadPoolExecutor thread.
-
-    Iterates source.extract_batches() and calls destination.write() for each chunk.
-    Returns (rows_read, rows_written).
-    """
     rows_read = 0
     rows_written = 0
     for i, batch in enumerate(source.extract_batches()):
@@ -30,22 +25,46 @@ def _sync_extract_and_write(
     return rows_read, rows_written
 
 
+async def _persist_job_run(job: Job, db_factory) -> None:
+    """Write a JobRun row to PostgreSQL. Errors are logged but never propagated."""
+    try:
+        from siphon.orm import JobRun
+
+        duration_ms = None
+        if job.started_at and job.finished_at:
+            duration_ms = int((job.finished_at - job.started_at).total_seconds() * 1000)
+
+        run = JobRun(
+            job_id=job.job_id,
+            status=job.status,
+            rows_read=job.rows_read,
+            rows_written=job.rows_written,
+            duration_ms=duration_ms,
+            error=job.error,
+            schema_changed=False,
+            started_at=job.started_at,
+            finished_at=job.finished_at,
+            created_at=datetime.now(tz=UTC),
+        )
+        async with db_factory() as session:
+            session.add(run)
+            await session.commit()
+    except Exception as exc:
+        logger.warning("Failed to persist job_run for %s: %s", job.job_id, exc)
+
+
 async def run_job(
-    job: Job,
     source: Source,
     destination: Destination,
+    job: Job,
     executor: ThreadPoolExecutor,
     timeout: int,
+    db_factory=None,
 ) -> None:
     """Execute a single extraction job. Updates job state in-place.
 
-    Runs the blocking extraction loop in a thread pool to avoid blocking the
-    event loop. Wraps execution in asyncio.wait_for for timeout enforcement.
-
-    Known limitation: asyncio.wait_for cancels the coroutine but the underlying
-    thread continues until I/O returns. The job is marked failed immediately,
-    freeing the worker slot. The thread eventually exits when the DB connection
-    times out at the network level.
+    db_factory: optional async_sessionmaker from db.py. When provided, persists
+    a JobRun row after the job completes (success or failure).
     """
     loop = asyncio.get_running_loop()
     job.status = "running"
@@ -59,7 +78,6 @@ async def run_job(
         )
         job.rows_read = rows_read
         job.rows_written = rows_written
-        # Collect failed files from sources that support partial success (e.g. SFTPSource)
         failed_files = list(getattr(source, "failed_files", []))
         job.failed_files = failed_files
         if rows_read != rows_written:
@@ -68,9 +86,7 @@ async def run_job(
             job.logs.append(f"ERROR: {job.error}")
             logger.error(
                 "Job %s row count mismatch: read=%d written=%d",
-                job.job_id,
-                rows_read,
-                rows_written,
+                job.job_id, rows_read, rows_written,
             )
             return
         if failed_files:
@@ -98,3 +114,5 @@ async def run_job(
 
     finally:
         job.finished_at = datetime.now(tz=UTC)
+        if db_factory is not None:
+            await _persist_job_run(job, db_factory)
