@@ -98,20 +98,21 @@ Cada fase termina com testes passando e código funcional antes de avançar.
 
 ---
 
-## Fase 8 — PostgreSQL + Auth
+## Fase 8 — PostgreSQL + Auth ✅
 **Objetivo:** persistência e autenticação JWT prontas. Zero lógica de negócio nova ainda.
 
-- [ ] Alembic setup + migrations para todas as 6 tabelas (`users`, `connections`, `pipelines`, `schedules`, `job_runs`, `refresh_tokens`)
-- [ ] `db.py` — SQLAlchemy async engine, session factory, `get_db` dependency
-- [ ] `auth/` router — `POST /api/v1/auth/login`, `/refresh`, `/logout`, `GET /api/v1/auth/me`
-- [ ] `get_current_principal` dependency — dual-auth: API key → JWT → 401
-- [ ] JWT: access token (15min, memória), refresh token (7d, httpOnly cookie `Path=/api/v1/auth/refresh`)
-- [ ] Token rotation + reuse detection (revogação de todas as sessões)
-- [ ] Rate limiting no login (slowapi, 10 req/min por IP)
-- [ ] `users/` router — CRUD admin-only
-- [ ] Startup: criar usuário admin se nenhum existir (`SIPHON_ADMIN_EMAIL` + `SIPHON_ADMIN_PASSWORD`)
-- [ ] `worker.py` — persistir resultado em `job_runs` ao finalizar job
-- [ ] Testes unitários: login/refresh/logout, token rotation, dual-auth, admin CRUD
+- [x] Alembic setup + migrations para todas as 6 tabelas (`users`, `connections`, `pipelines`, `schedules`, `job_runs`, `refresh_tokens`)
+- [x] `db.py` — SQLAlchemy async engine, session factory, `get_db` dependency
+- [x] `auth/` router — `POST /api/v1/auth/login`, `/refresh`, `/logout`, `GET /api/v1/auth/me`
+- [x] `get_current_principal` dependency — dual-auth: API key → JWT → 401
+- [x] JWT: access token (15min, memória), refresh token (7d, httpOnly cookie `Path=/api/v1/auth/refresh`)
+- [x] Token rotation + reuse detection (revogação de todas as sessões)
+- [x] Rate limiting no login (slowapi, 10 req/min por IP)
+- [x] `users/` router — CRUD admin-only
+- [x] Startup: criar usuário admin se nenhum existir (`SIPHON_ADMIN_EMAIL` + `SIPHON_ADMIN_PASSWORD`)
+- [x] `worker.py` — persistir resultado em `job_runs` ao finalizar job
+- [x] Testes unitários: login/refresh/logout, token rotation, dual-auth, admin CRUD
+- [x] PR aberto: `feature/phase-8-postgres-auth` (183 testes passando)
 
 ---
 
