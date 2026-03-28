@@ -11,7 +11,6 @@ from siphon.auth.jwt_utils import create_access_token
 from siphon.db import get_db
 from siphon.orm import User
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
@@ -74,7 +73,7 @@ def _make_app_with_dep(mock_session: AsyncMock) -> FastAPI:
     app.dependency_overrides[get_db] = override_db
 
     @app.get("/protected")
-    async def protected(principal: Principal = Depends(get_current_principal)):
+    async def protected(principal: Principal = Depends(get_current_principal)):  # noqa: B008
         return {"type": principal.type, "role": principal.role}
 
     return app
@@ -119,3 +118,33 @@ def test_inactive_user_returns_401():
     client = TestClient(app, raise_server_exceptions=False)
     resp = client.get("/protected", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 401
+
+
+def test_api_key_grants_access():
+    """HTTP-level test: SIPHON_API_KEY bearer token hits the api_key branch."""
+    import importlib
+    import os
+    from unittest.mock import patch
+
+    # Must reload deps to pick up the patched env var
+    with patch.dict(os.environ, {"SIPHON_API_KEY": "secret123"}):
+        import siphon.auth.deps as deps_module
+        importlib.reload(deps_module)
+        from siphon.auth.deps import get_current_principal as reloaded_dep
+
+        app2 = FastAPI()
+        mock_session = AsyncMock()
+
+        async def override_db():
+            yield mock_session
+
+        app2.dependency_overrides[get_db] = override_db
+
+        @app2.get("/protected")
+        async def protected(principal: Principal = Depends(reloaded_dep)):  # noqa: B008
+            return {"type": principal.type}
+
+        client = TestClient(app2, raise_server_exceptions=False)
+        resp = client.get("/protected", headers={"Authorization": "Bearer secret123"})
+        assert resp.status_code == 200
+        assert resp.json()["type"] == "api_key"
