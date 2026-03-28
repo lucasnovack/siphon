@@ -1,5 +1,4 @@
 # tests/test_auth.py
-import hashlib
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
@@ -215,7 +214,8 @@ def test_login_unknown_email_returns_401():
 
 
 def test_refresh_rotates_token():
-    from datetime import UTC, datetime, timedelta
+    from datetime import UTC, datetime
+
     from siphon.auth.jwt_utils import create_refresh_token
     from siphon.orm import RefreshToken
 
@@ -250,6 +250,7 @@ def test_refresh_rotates_token():
 
 def test_refresh_revoked_token_revokes_all_sessions():
     from datetime import UTC, datetime, timedelta
+
     from siphon.auth.jwt_utils import create_refresh_token
     from siphon.orm import RefreshToken
 
@@ -280,7 +281,6 @@ def test_refresh_revoked_token_revokes_all_sessions():
 
 
 def test_logout_revokes_token():
-    from datetime import UTC, datetime, timedelta
     from siphon.auth.jwt_utils import create_refresh_token
     from siphon.orm import RefreshToken
 
@@ -300,8 +300,8 @@ def test_logout_revokes_token():
     mock_session.commit = AsyncMock()
 
     client = _auth_app(mock_session)
-    client.cookies.set("refresh_token", token_str, path="/api/v1/auth")
-    resp = client.post("/api/v1/auth/logout")
+    # Pass token in body since cookie path doesn't cover /logout
+    resp = client.post("/api/v1/auth/logout", json={"refresh_token": token_str})
     assert resp.status_code == 200
     assert refresh.revoked_at is not None
 
