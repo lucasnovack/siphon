@@ -64,6 +64,9 @@ class Pipeline(Base):
     last_schema_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     min_rows_expected: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_rows_drop_pct: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dest_connection_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("connections.id"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -101,4 +104,7 @@ class JobRun(Base):
     schema_changed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    triggered_by: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="api"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
