@@ -13,7 +13,7 @@ _ALGORITHM = "HS256"
 _DEFAULT_ACCESS_EXPIRE_MINUTES = 15
 _REFRESH_TOKEN_EXPIRE_DAYS = 7
 
-_pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def create_access_token(
