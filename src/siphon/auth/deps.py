@@ -32,7 +32,7 @@ class Principal(BaseModel):
 
 async def get_current_principal(
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db),  # noqa: B008
 ) -> Principal:
     """Dual-auth: SIPHON_API_KEY (Airflow backward-compat) OR JWT access token."""
     auth = request.headers.get("Authorization", "")
@@ -45,8 +45,6 @@ async def get_current_principal(
     if auth.startswith("Bearer "):
         token = auth[7:]
         try:
-            import jwt as pyjwt
-
             payload = decode_access_token(token)
             if payload.get("type") != "access":
                 raise ValueError("not an access token")
