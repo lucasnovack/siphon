@@ -32,6 +32,8 @@ if not os.getenv("SIPHON_API_KEY"):
     logging.warning("SIPHON_API_KEY not set — API authentication is disabled")
 if not os.getenv("SIPHON_ALLOWED_HOSTS"):
     logging.warning("SIPHON_ALLOWED_HOSTS not set — all hosts are permitted (SSRF risk)")
+if not os.getenv("SIPHON_JWT_SECRET"):
+    logging.warning("SIPHON_JWT_SECRET not set — JWT tokens are signed with a dev secret (insecure)")
 
 # ── Queue singleton ───────────────────────────────────────────────────────────
 queue: JobQueue = JobQueue()

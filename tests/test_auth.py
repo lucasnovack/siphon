@@ -213,6 +213,22 @@ def test_login_unknown_email_returns_401():
     assert resp.status_code == 401
 
 
+def test_login_inactive_user_returns_401():
+    from siphon.auth.jwt_utils import hash_password
+    user = _make_user("admin")
+    user.hashed_password = hash_password("pass123")
+    user.is_active = False
+
+    mock_session = AsyncMock()
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = user
+    mock_session.execute = AsyncMock(return_value=result)
+
+    client = _auth_app(mock_session)
+    resp = client.post("/api/v1/auth/login", json={"email": user.email, "password": "pass123"})
+    assert resp.status_code == 401
+
+
 def test_refresh_rotates_token():
     from datetime import UTC, datetime
 

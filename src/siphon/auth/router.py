@@ -48,7 +48,7 @@ async def login(
     """Authenticate with email/password. Returns access token + sets httpOnly refresh cookie."""
     result = await db.execute(select(User).where(User.email == credentials.email))
     user = result.scalar_one_or_none()
-    if not user or not verify_password(credentials.password, user.hashed_password):
+    if not user or not verify_password(credentials.password, user.hashed_password) or not user.is_active:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     access_token = create_access_token(user.id, user.role)
