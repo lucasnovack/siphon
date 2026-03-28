@@ -127,3 +127,62 @@ def test_test_connection_sql_calls_connectorx(monkeypatch):
         from siphon.connections.router import _test_connection
         _test_connection("sql", {"connection": "mysql://u:p@host/db"})
         mock_cx.assert_called_once()
+
+
+def test_create_connection_conflict_returns_409(client):
+    tc, db = client
+    row = _make_conn_row()
+    db.execute = AsyncMock(return_value=MagicMock(
+        scalar_one_or_none=MagicMock(return_value=row)  # already exists
+    ))
+    resp = tc.post("/api/v1/connections", json={
+        "name": "prod-mysql",
+        "conn_type": "sql",
+        "config": {"connection": "mysql://u:p@host/db"},
+    })
+    assert resp.status_code == 409
+
+
+def test_update_connection_returns_200(client):
+    tc, db = client
+    row = _make_conn_row()
+    db.get = AsyncMock(return_value=row)
+    db.execute = AsyncMock(return_value=MagicMock(
+        scalar_one_or_none=MagicMock(return_value=None)  # no duplicate
+    ))
+    db.commit = AsyncMock()
+    db.refresh = AsyncMock(side_effect=lambda obj: None)
+    resp = tc.put(f"/api/v1/connections/{row.id}", json={"name": "renamed"})
+    assert resp.status_code == 200
+
+
+def test_delete_connection_returns_204(client):
+    tc, db = client
+    row = _make_conn_row()
+    db.get = AsyncMock(return_value=row)
+    db.delete = AsyncMock()
+    db.commit = AsyncMock()
+    resp = tc.delete(f"/api/v1/connections/{row.id}")
+    assert resp.status_code == 204
+
+
+def test_create_connection_requires_admin(monkeypatch):
+    monkeypatch.setenv("SIPHON_ENCRYPTION_KEY", _fernet_key())
+    from siphon.auth.deps import get_current_principal
+    from siphon.connections.router import router
+    app = FastAPI()
+    app.include_router(router)
+    db_mock = AsyncMock()
+    app.dependency_overrides[get_db] = lambda: db_mock
+
+    op = MagicMock()
+    op.role = "operator"
+    from siphon.auth.deps import Principal
+    app.dependency_overrides[get_current_principal] = lambda: Principal(type="user", user=op)
+    tc = TestClient(app)
+    resp = tc.post("/api/v1/connections", json={
+        "name": "test",
+        "conn_type": "sql",
+        "config": {"connection": "mysql://u:p@host/db"},
+    })
+    assert resp.status_code == 403

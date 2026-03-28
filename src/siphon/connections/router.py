@@ -14,6 +14,7 @@ from siphon.auth.deps import Principal, get_current_principal
 from siphon.crypto import decrypt, encrypt
 from siphon.db import get_db
 from siphon.orm import Connection
+from siphon.plugins.sources.sql import _validate_host
 
 router = APIRouter(prefix="/api/v1/connections", tags=["connections"])
 
@@ -127,6 +128,10 @@ async def update_connection(
     if not conn:
         raise HTTPException(404, "Connection not found")
     if body.name is not None:
+        if body.name != conn.name:
+            existing = await db.execute(select(Connection).where(Connection.name == body.name))
+            if existing.scalar_one_or_none():
+                raise HTTPException(409, f"Connection '{body.name}' already exists")
         conn.name = body.name
     if body.config is not None:
         conn.encrypted_config = encrypt(json.dumps(body.config))
@@ -158,10 +163,12 @@ def _test_connection(conn_type: str, config: dict) -> None:
     """Synchronous connectivity check — run in a thread executor."""
     if conn_type == "sql":
         import connectorx as cx
+        _validate_host(config["connection"])
         cx.read_sql(config["connection"], "SELECT 1", return_type="arrow")
 
     elif conn_type == "sftp":
         import paramiko
+        _validate_host(f"dummy://{config['host']}")
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.RejectPolicy())
         ssh.connect(
@@ -177,6 +184,7 @@ def _test_connection(conn_type: str, config: dict) -> None:
         import os
 
         import pyarrow.fs as pafs
+        _validate_host(f"dummy://{config['endpoint']}")
         fs = pafs.S3FileSystem(
             endpoint_override=config["endpoint"],
             access_key=config["access_key"],
