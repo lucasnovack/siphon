@@ -22,6 +22,9 @@ dependencies = [
     "passlib[bcrypt]>=1.7",
     "bcrypt>=3.2,<4.0",
     "slowapi>=0.1",
+    "cryptography>=42.0",
+    "apscheduler[sqlalchemy]>=3.10",
+    "prometheus-client>=0.20",
 ]
 
 [project.optional-dependencies]
