@@ -1,4 +1,5 @@
-from unittest.mock import patch
+from datetime import datetime
+from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
 import pytest
@@ -136,3 +137,174 @@ def test_host_validation_skipped_when_allowlist_empty():
         result = src.extract()
 
     assert result.num_rows == 1
+
+
+# ── Oracle helpers ─────────────────────────────────────────────────────────────
+
+
+def test_oracle_rows_to_arrow_basic():
+    from siphon.plugins.sources.sql import _oracle_rows_to_arrow
+
+    rows = [(1, "Alice"), (2, "Bob")]
+    description = [
+        ("ID", None, None, None, None, None, None),
+        ("NAME", None, None, None, None, None, None),
+    ]
+    table = _oracle_rows_to_arrow(rows, description)
+
+    assert table.num_rows == 2
+    assert table.column_names == ["id", "name"]
+    assert table["id"].to_pylist() == [1, 2]
+    assert table["name"].to_pylist() == ["Alice", "Bob"]
+
+
+def test_oracle_rows_to_arrow_infers_int64():
+    from siphon.plugins.sources.sql import _oracle_rows_to_arrow
+
+    rows = [(1,), (2,)]
+    description = [("ID", None, None, None, None, None, None)]
+    table = _oracle_rows_to_arrow(rows, description)
+
+    assert table.schema.field("id").type == pa.int64()
+
+
+def _make_mock_oracledb():
+    mock = MagicMock()
+    mock.DB_TYPE_NUMBER = "DB_TYPE_NUMBER"
+    mock.DB_TYPE_DATE = "DB_TYPE_DATE"
+    mock.DB_TYPE_TIMESTAMP = "DB_TYPE_TIMESTAMP"
+    mock.DB_TYPE_CLOB = "DB_TYPE_CLOB"
+    mock.DB_TYPE_BLOB = "DB_TYPE_BLOB"
+    return mock
+
+
+def _make_mock_cursor(row_batches, description):
+    cursor = MagicMock()
+    cursor.description = description
+    cursor.fetchmany.side_effect = [*row_batches, []]
+    cursor.__enter__ = lambda s: s
+    cursor.__exit__ = MagicMock(return_value=False)
+    return cursor
+
+
+def _make_mock_conn(cursor):
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+    conn.__enter__ = lambda s: s
+    conn.__exit__ = MagicMock(return_value=False)
+    return conn
+
+
+def test_oracle_rows_to_arrow_infers_float64():
+    from siphon.plugins.sources.sql import _oracle_rows_to_arrow
+
+    rows = [(1.5,), (2.7,)]
+    description = [("PRICE", None, None, None, None, None, None)]
+    table = _oracle_rows_to_arrow(rows, description)
+
+    assert table.schema.field("price").type == pa.float64()
+
+
+# ── Oracle streaming (extract_batches) ────────────────────────────────────────
+
+
+def test_oracle_yields_chunks():
+    """extract_batches yields one pa.Table per fetchmany batch until exhausted."""
+    rows_batch = [(i, f"name{i}") for i in range(10)]
+    description = [
+        ("ID", None, None, None, None, None, None),
+        ("NAME", None, None, None, None, None, None),
+    ]
+    mock_oracledb = _make_mock_oracledb()
+    cursor = _make_mock_cursor([rows_batch, rows_batch, rows_batch], description)
+    mock_oracledb.connect.return_value = _make_mock_conn(cursor)
+
+    with patch.dict("sys.modules", {"oracledb": mock_oracledb}):
+        cls = get_source("sql")
+        src = cls(
+            connection="oracle+oracledb://user:pass@host:1521/svc",
+            query="SELECT id, name FROM t",
+        )
+        chunks = list(src.extract_batches())
+
+    assert len(chunks) == 3
+    for chunk in chunks:
+        assert chunk.num_rows == 10
+
+
+def test_oracle_number_types():
+    """NUMBER(p,0) maps to int64 and NUMBER(p,s>0) maps to float64 in Arrow."""
+    rows = [(1, 9.99)]
+    description = [
+        ("ID", None, None, None, None, None, None),
+        ("PRICE", None, None, None, None, None, None),
+    ]
+    mock_oracledb = _make_mock_oracledb()
+    cursor = _make_mock_cursor([rows], description)
+    mock_oracledb.connect.return_value = _make_mock_conn(cursor)
+
+    with patch.dict("sys.modules", {"oracledb": mock_oracledb}):
+        cls = get_source("sql")
+        src = cls(
+            connection="oracle+oracledb://user:pass@host:1521/svc",
+            query="SELECT id, price FROM t",
+        )
+        chunks = list(src.extract_batches())
+
+    schema = chunks[0].schema
+    assert schema.field("id").type == pa.int64()
+    assert schema.field("price").type == pa.float64()
+
+
+def test_oracle_date_type():
+    """DATE columns returned as datetime objects yield pa.timestamp('us') in Arrow."""
+    rows = [(datetime(2026, 3, 28, 10, 0, 0),)]
+    description = [("CREATED_AT", None, None, None, None, None, None)]
+    mock_oracledb = _make_mock_oracledb()
+    cursor = _make_mock_cursor([rows], description)
+    mock_oracledb.connect.return_value = _make_mock_conn(cursor)
+
+    with patch.dict("sys.modules", {"oracledb": mock_oracledb}):
+        cls = get_source("sql")
+        src = cls(
+            connection="oracle+oracledb://user:pass@host:1521/svc",
+            query="SELECT created_at FROM t",
+        )
+        chunks = list(src.extract_batches())
+
+    assert chunks[0].schema.field("created_at").type == pa.timestamp("us")
+
+
+def test_oracle_clob_emits_warning():
+    """_oracle_output_type_handler logs a warning when it encounters a CLOB column."""
+    import siphon.plugins.sources.sql as sql_mod
+
+    mock_oracledb = _make_mock_oracledb()
+    mock_cursor = MagicMock()
+
+    with patch.dict("sys.modules", {"oracledb": mock_oracledb}), patch.object(
+        sql_mod.logger, "warning"
+    ) as mock_warn:
+        sql_mod._oracle_output_type_handler(
+            mock_cursor, "NOTES", mock_oracledb.DB_TYPE_CLOB, None, None, None
+        )
+
+    mock_warn.assert_called_once()
+
+
+def test_oracle_empty_result():
+    """When fetchmany returns [] immediately, extract_batches yields nothing."""
+    description = [("ID", None, None, None, None, None, None)]
+    mock_oracledb = _make_mock_oracledb()
+    cursor = _make_mock_cursor([], description)
+    mock_oracledb.connect.return_value = _make_mock_conn(cursor)
+
+    with patch.dict("sys.modules", {"oracledb": mock_oracledb}):
+        cls = get_source("sql")
+        src = cls(
+            connection="oracle+oracledb://user:pass@host:1521/svc",
+            query="SELECT id FROM empty_table",
+        )
+        chunks = list(src.extract_batches())
+
+    assert chunks == []
