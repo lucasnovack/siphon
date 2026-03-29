@@ -69,7 +69,58 @@ Pipeline (source + dest + schedule + DQ)
 
 ---
 
-## Quick Start
+## Quick Start (UI)
+
+The fastest way to get started is through the web UI.
+
+**Prerequisites:** Docker and Docker Compose.
+
+```bash
+# 1. Clone and start the full stack
+git clone https://github.com/lucasnovack/siphon
+cd siphon
+docker compose up -d
+```
+
+Wait ~20 seconds for all services to start (PostgreSQL, MinIO, Siphon). Siphon automatically runs database migrations on first boot.
+
+```bash
+# 2. Check that everything is up
+docker compose ps
+# siphon should show "healthy"
+```
+
+**3. Open the UI:** [http://localhost:8000](http://localhost:8000)
+
+Login with the bootstrap admin credentials set in `docker-compose.yml`:
+- Email: `admin@example.com`
+- Password: `changeme123`
+
+**4. Create connections** (Connections → New):
+- **Source:** type `sql`, connection string e.g. `mysql://siphon:siphon@mysql:3306/testdb`
+- **Destination:** type `s3_parquet`, bucket `bronze`, endpoint `http://minio:9000`, access key `minioadmin`, secret `minioadmin`
+
+MinIO browser: [http://localhost:9001](http://localhost:9001) (minioadmin / minioadmin)
+
+**5. Create a pipeline** (Pipelines → New Pipeline):
+- Select source connection → write a query → preview 100 rows
+- Select destination → set S3 prefix (e.g. `bronze/orders/`)
+- Optionally set a cron schedule → Create
+
+**6. Trigger a run** and watch logs in real time on the Runs page.
+
+> **Production note:** before exposing Siphon to any network, replace the default secrets in `docker-compose.yml`:
+> - `SIPHON_JWT_SECRET` — any long random string
+> - `SIPHON_ADMIN_PASSWORD` — strong password
+> - `SIPHON_ENCRYPTION_KEY` — generate with:
+>   ```bash
+>   docker compose run --rm siphon python -c \
+>     "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+>   ```
+
+---
+
+## Quick Start (API)
 
 ```bash
 # Start the full local stack (Siphon + PostgreSQL + MySQL + MinIO)
@@ -860,7 +911,7 @@ alembic/versions/
 | 7.5 | ✅ | Oracle cursor streaming (no pandas, oracledb native fetchmany) |
 | 8 | ✅ | PostgreSQL persistence + JWT auth + token rotation + user management |
 | **9** | ✅ | **Connections + Pipelines API, APScheduler, incremental watermarks, DQ, schema evolution, preview, runs, Prometheus** |
-| 10 | 🔜 | React UI: pipeline wizard, query editor (CodeMirror), run history, schema drift badge |
+| **10** | ✅ | **React UI: pipeline wizard, query editor (CodeMirror), run history, schema drift badge, settings** |
 | 11 | ⏳ | Kubernetes manifests (deployment, service, HPA) |
 | 12 | ⏳ | Airflow SiphonOperator package |
 
