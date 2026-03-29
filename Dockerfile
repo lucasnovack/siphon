@@ -16,7 +16,7 @@ FROM python:3.12-slim AS builder
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /app
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock README.md ./
 COPY src/ ./src/
 
 # Install dependencies into /app/.venv — no cache, no dev deps
@@ -48,5 +48,6 @@ USER siphon
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${SIPHON_PORT}/health/live')"
 
-# --workers 1: in-memory state is not shared between processes
-CMD ["sh", "-c", "uvicorn siphon.main:app --host 0.0.0.0 --port ${SIPHON_PORT} --workers 1"]
+# Run DB migrations (no-op if DATABASE_URL is unset), then start the server.
+# --workers 1: in-memory state is not shared between processes.
+CMD ["sh", "-c", "[ -n \"$DATABASE_URL\" ] && alembic upgrade head; uvicorn siphon.main:app --host 0.0.0.0 --port ${SIPHON_PORT} --workers 1"]
