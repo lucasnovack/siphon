@@ -1,3 +1,15 @@
+# ── Stage 0: frontend builder ─────────────────────────────────────────────────
+FROM node:22-slim AS frontend-builder
+
+RUN npm install -g pnpm
+
+WORKDIR /frontend
+COPY frontend/package.json frontend/pnpm-lock.yaml* ./
+RUN pnpm install --frozen-lockfile
+
+COPY frontend/ ./
+RUN pnpm build
+
 # ── Stage 1: builder ──────────────────────────────────────────────────────────
 FROM python:3.12-slim AS builder
 
@@ -21,6 +33,7 @@ WORKDIR /app
 # Copy only the virtualenv and source — no uv, no pip cache, no build artifacts
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/src /app/src
+COPY --from=frontend-builder /frontend/dist /app/frontend/dist
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
