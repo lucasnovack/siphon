@@ -10,19 +10,19 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 export function DashboardPage() {
   const { data: runs } = useQuery({
-    queryKey: queryKeys.runs.list({ page: 1, limit: 10 }),
-    queryFn: () => runsApi.list({ page: 1, limit: 10 }).then((r) => r.data),
+    queryKey: queryKeys.runs.list({ limit: 10 }),
+    queryFn: () => runsApi.list({ limit: 10 }).then((r) => r.data),
     refetchInterval: 10_000,
     refetchIntervalInBackground: false,
   })
 
   const { data: pipelines } = useQuery({
     queryKey: queryKeys.pipelines.list(1, 100),
-    queryFn: () => pipelinesApi.list(1, 100).then((r) => r.data),
+    queryFn: () => pipelinesApi.list().then((r) => r.data),
   })
 
-  const recentRuns = runs?.items ?? []
-  const activePipelines = pipelines?.items.filter((p) => p.is_active).length ?? 0
+  const recentRuns = runs ?? []
+  const activePipelines = pipelines?.filter((p) => p.is_active).length ?? 0
   const successToday = recentRuns.filter((r) => r.status === 'success').length
   const failedToday = recentRuns.filter((r) => r.status === 'failed').length
 
