@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
@@ -260,3 +261,21 @@ async def metrics_endpoint() -> Response:
 
     queue_depth.set(queue.stats.get("queued", 0) + queue.stats.get("active", 0))
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+# ── SPA static files (Phase 10) ───────────────────────────────────────────────
+# Served last so all /api/* and /jobs/* routes take precedence.
+_FRONTEND_DIR = os.getenv("SIPHON_FRONTEND_DIR", "/app/frontend/dist")
+
+if os.path.isdir(_FRONTEND_DIR):
+    # Serve JS/CSS/assets normally; fall back to index.html for unknown paths
+    # so React Router can handle client-side navigation.
+    app.mount("/", StaticFiles(directory=_FRONTEND_DIR, html=True), name="spa")
+else:
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def _spa_not_built(full_path: str) -> JSONResponse:  # noqa: ARG001
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Frontend not built. Run `pnpm build` inside frontend/."},
+        )
