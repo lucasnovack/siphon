@@ -8,7 +8,17 @@ services:
       SIPHON_MAX_WORKERS: "4"
       SIPHON_ALLOWED_S3_PREFIX: "bronze/"
       SIPHON_S3_SCHEME: "http"
+      # PostgreSQL — required for UI, auth, pipelines and scheduling
+      DATABASE_URL: "postgresql+asyncpg://siphon:siphon@postgres:5432/siphon"
+      # Auth — change all three values before exposing to any network
+      SIPHON_JWT_SECRET: "dev-jwt-secret-change-in-production"
+      SIPHON_ENCRYPTION_KEY: "aMgwZ5VXJPcxLd3zoM510Dtb59-O6HhCUG8DhlZUiAo="
+      # Bootstrap admin (only used when no users exist in the database)
+      SIPHON_ADMIN_EMAIL: "admin@example.com"
+      SIPHON_ADMIN_PASSWORD: "changeme123"
     depends_on:
+      postgres:
+        condition: service_healthy
       mysql:
         condition: service_healthy
       minio:
@@ -17,8 +27,24 @@ services:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live')\""]
       interval: 10s
       timeout: 5s
-      start_period: 15s
+      start_period: 30s
       retries: 5
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: siphon
+      POSTGRES_USER: siphon
+      POSTGRES_PASSWORD: siphon
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U siphon -d siphon"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   mysql:
     image: mysql:8.0
@@ -35,20 +61,6 @@ services:
       timeout: 5s
       retries: 10
 
-  postgres:
-    image: postgres:16
-    environment:
-      POSTGRES_DB: testdb
-      POSTGRES_USER: siphon
-      POSTGRES_PASSWORD: siphon
-    ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U siphon -d testdb"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
@@ -58,6 +70,8 @@ services:
     ports:
       - "9000:9000"
       - "9001:9001"
+    volumes:
+      - minio_data:/data
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live"]
       interval: 5s
@@ -69,3 +83,7 @@ services:
     command: "siphon:siphon:::upload"
     ports:
       - "2222:22"
+
+volumes:
+  postgres_data:
+  minio_data:
