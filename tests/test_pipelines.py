@@ -1,0 +1,127 @@
+# tests/test_pipelines.py
+import uuid
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from siphon.auth.deps import Principal
+
+
+def _admin():
+    user = MagicMock()
+    user.role = "admin"
+    return Principal(type="user", user=user)
+
+
+def _operator():
+    user = MagicMock()
+    user.role = "operator"
+    return Principal(type="user", user=user)
+
+
+def _make_pipeline():
+    p = MagicMock()
+    p.id = uuid.uuid4()
+    p.name = "bronze_cidades"
+    p.source_connection_id = uuid.uuid4()
+    p.dest_connection_id = uuid.uuid4()
+    p.query = "SELECT * FROM cities"
+    p.destination_path = "s3a://bronze/cities/{date}"
+    p.extraction_mode = "full_refresh"
+    p.incremental_key = None
+    p.last_watermark = None
+    p.last_schema_hash = None
+    p.min_rows_expected = None
+    p.max_rows_drop_pct = None
+    p.created_at = datetime.now(tz=UTC)
+    p.updated_at = datetime.now(tz=UTC)
+    return p
+
+
+@pytest.fixture()
+def client():
+    import siphon.pipelines.router as pr_module
+    app = FastAPI()
+    app.include_router(pr_module.router)
+    db_mock = AsyncMock()
+    # Key overrides on the router's own imports so they survive module reloads
+    app.dependency_overrides[pr_module.get_db] = lambda: db_mock
+    app.dependency_overrides[pr_module.get_current_principal] = lambda: _admin()
+    return TestClient(app), db_mock
+
+
+def test_list_pipelines_returns_200(client):
+    tc, db = client
+    db.execute = AsyncMock(return_value=MagicMock(
+        scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+    ))
+    resp = tc.get("/api/v1/pipelines")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_get_pipeline_404(client):
+    tc, db = client
+    db.get = AsyncMock(return_value=None)
+    resp = tc.get(f"/api/v1/pipelines/{uuid.uuid4()}")
+    assert resp.status_code == 404
+
+
+def test_create_pipeline_201(client):
+    tc, db = client
+    p = _make_pipeline()
+    db.execute = AsyncMock(return_value=MagicMock(
+        scalar_one_or_none=MagicMock(return_value=None)
+    ))
+    db.add = MagicMock()
+    db.commit = AsyncMock()
+    db.refresh = AsyncMock(side_effect=lambda obj: None)
+
+    with patch("siphon.pipelines.router._after_create", return_value=p):
+        resp = tc.post("/api/v1/pipelines", json={
+            "name": "bronze_cidades",
+            "source_connection_id": str(p.source_connection_id),
+            "dest_connection_id": str(p.dest_connection_id),
+            "query": "SELECT * FROM cities",
+            "destination_path": "s3a://bronze/cities/{date}",
+            "extraction_mode": "full_refresh",
+        })
+    assert resp.status_code == 201
+
+
+def test_delete_pipeline_requires_admin(client):
+    tc, db = client
+    import siphon.pipelines.router as pr_module
+    app2 = FastAPI()
+    app2.include_router(pr_module.router)
+    app2.dependency_overrides[pr_module.get_db] = lambda: db
+    app2.dependency_overrides[pr_module.get_current_principal] = lambda: _operator()
+    tc2 = TestClient(app2)
+    db.get = AsyncMock(return_value=_make_pipeline())
+    resp = tc2.delete(f"/api/v1/pipelines/{uuid.uuid4()}")
+    assert resp.status_code == 403
+
+
+def test_upsert_schedule_creates_schedule(client):
+    tc, db = client
+    p = _make_pipeline()
+    db.get = AsyncMock(return_value=p)
+    db.execute = AsyncMock(return_value=MagicMock(
+        scalar_one_or_none=MagicMock(return_value=None)
+    ))
+    db.add = MagicMock()
+    db.commit = AsyncMock()
+    schedule_mock = MagicMock()
+    schedule_mock.cron = "0 3 * * *"
+    schedule_mock.is_active = True
+    db.refresh = AsyncMock(side_effect=lambda obj: None)
+
+    with patch("siphon.pipelines.router._after_schedule_upsert", return_value=schedule_mock):
+        resp = tc.put(f"/api/v1/pipelines/{p.id}/schedule", json={
+            "cron": "0 3 * * *",
+            "is_active": True,
+        })
+    assert resp.status_code == 200
