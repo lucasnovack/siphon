@@ -312,12 +312,17 @@ async def trigger_pipeline(
     except Exception as exc:
         raise HTTPException(400, f"Invalid pipeline config: {exc}") from exc
 
-    job = Job(job_id=str(uuid.uuid4()))
-    job.pipeline_dq = {
-        "min_rows_expected": p.min_rows_expected,
-        "max_rows_drop_pct": p.max_rows_drop_pct,
-        "prev_rows": None,
-    }
+    has_dq = p.min_rows_expected is not None or p.max_rows_drop_pct is not None
+    job = Job(
+        job_id=str(uuid.uuid4()),
+        pipeline_id=str(pipeline_id),
+        pipeline_schema_hash=p.last_schema_hash,
+        pipeline_dq={
+            "min_rows_expected": p.min_rows_expected,
+            "max_rows_drop_pct": p.max_rows_drop_pct,
+            "prev_rows": None,
+        } if has_dq else None,
+    )
 
     try:
         source_cls = get_source(req.source.type)
@@ -328,9 +333,7 @@ async def trigger_pipeline(
     source = source_cls(**req.source.model_dump(exclude={"type"}))
     destination = dest_cls(**req.destination.model_dump(exclude={"type"}))
 
-    q = _get_queue()
-    await q.submit(job, source, destination)
-
+    # Create the job_run row first so worker can UPDATE it instead of INSERT
     now = datetime.now(tz=UTC)
     run = JobRun(
         job_id=job.job_id,
@@ -342,6 +345,11 @@ async def trigger_pipeline(
     db.add(run)
     await db.commit()
     await db.refresh(run)
+
+    job.run_id = run.id  # worker will UPDATE this row on completion
+
+    q = _get_queue()
+    await q.submit(job, source, destination)
 
     return {"job_id": job.job_id, "status": job.status, "run_id": run.id}
 

@@ -1551,7 +1551,7 @@ tag v*:
 
 ## 17. Definition of Done (v1)
 
-<!-- Fases 1–8 completas e mergeadas em master. Fase 9 em progresso (branch feature/phase-9-connections-pipelines-api). -->
+<!-- Fases 1–9 implementadas (branch feature/phase-9-connections-pipelines-api, 256 testes, pendente merge para master). -->
 
 - [x] `POST /jobs` + polling works end-to-end for a MySQL source → MinIO Parquet destination
 - [x] `POST /jobs` + polling works end-to-end for an SFTP source (with a stub parser) → MinIO Parquet destination
@@ -1594,7 +1594,7 @@ Full design spec: `docs/superpowers/specs/2026-03-25-siphon-ui-design.md`
 | 7 — Hotfixes críticos | ✅ mergeado em `master` | `hotfix/phase-7` |
 | 7.5 — Oracle cursor streaming | ✅ mergeado em `master` | `feature/phase-7.5-oracle-cursor-streaming` |
 | 8 — PostgreSQL + Auth | ✅ mergeado em `master` (183 testes) | `feature/phase-8-postgres-auth`, 2026-03-28 |
-| 9 — Connections + Pipelines API | 🔄 em progresso (201 testes) | `feature/phase-9-connections-pipelines-api`, 2026-03-29 |
+| 9 — Connections + Pipelines API | ✅ implementado (256 testes) | `feature/phase-9-connections-pipelines-api`, 2026-03-29 |
 | 10 — Frontend | ⏳ não iniciado | — |
 
 ### Overview
@@ -1665,3 +1665,24 @@ React 18 + Vite, React Router v6, TanStack Query, shadcn/ui + Tailwind, react-ho
 ### Prometheus metrics
 
 `GET /metrics` returns Prometheus text format: `siphon_jobs_total`, `siphon_job_duration_seconds`, `siphon_rows_extracted_total`, `siphon_queue_depth`, `siphon_schema_changes_total`.
+
+### Phase 9 — módulos implementados
+
+| Módulo | Arquivo | Responsabilidade |
+|---|---|---|
+| Crypto | `src/siphon/crypto.py` | Fernet encrypt/decrypt; chave via `SIPHON_ENCRYPTION_KEY` |
+| Connections router | `src/siphon/connections/router.py` | CRUD, test-connection, types list |
+| Pipelines router | `src/siphon/pipelines/router.py` | CRUD, trigger, schedule upsert/delete, runs paginados |
+| Watermark | `src/siphon/pipelines/watermark.py` | `inject_watermark` + `_cast_for_dialect` (mysql/pg/oracle/mssql) |
+| Preview router | `src/siphon/preview/router.py` | `POST /api/v1/preview` — LIMIT 100, SSRF guard |
+| Runs router | `src/siphon/runs/router.py` | Lista global, logs cursor, cancel admin-only |
+| Scheduler | `src/siphon/scheduler.py` | APScheduler + PostgreSQL jobstore + advisory lock |
+| Metrics | `src/siphon/metrics.py` | Contadores/histogramas Prometheus |
+| Worker (extensão) | `src/siphon/worker.py` | Schema hash, DQ, `_persist_job_run` UPDATE/INSERT, `_update_pipeline_metadata` |
+| Migrations | `src/siphon/migrations/` | 001 (schema base), 002 (`dest_connection_id`, `triggered_by`) |
+
+#### Dependências de test cross-module (armadilha conhecida)
+
+`test_main.py` executa `importlib.reload(siphon.db)` e `importlib.reload(siphon.auth.deps)` para testar comportamento sem `DATABASE_URL`. Isso cria novos objetos de função. Qualquer fixture que capturar `get_db` ou `get_current_principal` antes do reload terá referência stale.
+
+**Solução:** usar `module.get_db` e `module.get_current_principal` como chaves de override — nunca importar direto e capturar em variável de módulo. Ver `tests/test_pipelines.py` e `tests/test_connections.py` como referência.
