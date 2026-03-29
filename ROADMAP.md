@@ -127,28 +127,58 @@ Cada fase termina com testes passando e código funcional antes de avançar.
 
 ---
 
-## Fase 9 — Connections + Pipelines API 🔄
+## Fase 9 — Connections + Pipelines API ✅
 **Objetivo:** toda a lógica de negócio da UI exposta via API. Frontend ainda não existe.
-**Branch:** `feature/phase-9-connections-pipelines-api` (201 testes passando, 2026-03-29)
+**Branch:** `feature/phase-9-connections-pipelines-api` (256 testes passando, 2026-03-29)
 
+### Infraestrutura base
 - [x] `crypto.py` — Fernet encrypt/decrypt com `SIPHON_ENCRYPTION_KEY`
 - [x] Migration 002 — `dest_connection_id` em `pipelines`, `triggered_by` em `job_runs`
+- [x] `metrics.py` — contadores/histogramas Prometheus (`jobs_total`, `job_duration_seconds`, `rows_extracted_total`, `queue_depth`, `schema_changes_total`)
+
+### Routers
 - [x] `connections/` router — CRUD, Fernet encryption/decryption, `POST /test`, `GET /types`
-- [x] `pipelines/` router — CRUD (name 409, admin-only writes), `GET /:id/runs` paginado, schedule upsert/delete
-- [x] `POST /api/v1/pipelines/:id/trigger` — monta ExtractRequest a partir de connections, enfileira job, persiste `job_runs`
-- [x] Injeção de watermark no trigger (`siphon.pipelines.watermark.inject_watermark`) — chamada no `trigger_pipeline`, módulo ainda a implementar
-- [x] `pipelines_router` registrado em `main.py`
-- [x] Testes unitários: connections (CRUD, 409, Fernet, test endpoint), pipelines (CRUD, 403 operator, schedule upsert), 201 testes passando
-- [ ] `siphon/pipelines/watermark.py` — injeção tipo-aware por dialeto (mysql/postgres/oracle/mssql)
-- [ ] `siphon/scheduler.py` — APScheduler com jobstore PostgreSQL + `pg_try_advisory_xact_lock`
-- [ ] `preview/` router — `POST /api/v1/preview` com `LIMIT 100`, passa por `_validate_host()`
-- [ ] `runs/` router — histórico global paginado, logs com cursor, `POST /:id/cancel`
-- [ ] Schema evolution: SHA-256 do Arrow schema em `worker.py`, comparação com `pipelines.last_schema_hash`, `schema_changed` em `job_runs`
-- [ ] Data quality: `min_rows_expected` e `max_rows_drop_pct` verificados após extração, antes de escrita S3
-- [ ] Watermark update: atualizar `pipelines.last_watermark` apenas após `job_runs` persistido com sucesso
-- [ ] `GET /metrics` — Prometheus (`prometheus-client`): jobs_total, duration_histogram, rows_total, queue_depth, schema_changes_total
+- [x] `pipelines/` router — CRUD (409 em nome duplicado, writes admin-only), `GET /:id/runs` paginado, schedule upsert/delete via APScheduler
+- [x] `POST /api/v1/pipelines/:id/trigger` — monta Job a partir de connections, cria `job_runs` com status `queued`, enfileira job; worker UPDATa a linha existente (sem duplicata)
+- [x] `preview/` router — `POST /api/v1/preview` com `LIMIT 100` via subquery, validação SSRF via `_validate_host()`
+- [x] `runs/` router — histórico global paginado newest-first, logs com cursor `?since=N`, `POST /:id/cancel` (admin-only)
+- [x] `GET /metrics` — endpoint Prometheus com `queue_depth` atualizado em tempo real
+- [x] Todos os routers registrados em `main.py`; scheduler iniciado/parado no lifespan
+
+### Worker (`worker.py`)
+- [x] `_compute_schema_hash(schema)` — SHA-256 de `[(name, type)]` em JSON ordenado
+- [x] Schema evolution — comparação com `pipeline.last_schema_hash`; `job_runs.schema_changed=True` + log de warning; escrita nunca bloqueada
+- [x] `_check_data_quality(dq, rows_read)` — verifica `min_rows_expected` e `max_rows_drop_pct`; erro antes de qualquer escrita
+- [x] `_sync_extract_and_write` — bufferiza batches quando DQ ativo; streaming direto caso contrário; sempre seta `job.schema_hash`
+- [x] `_persist_job_run` — UPDATE se `job.run_id` set (linha já existe), INSERT caso contrário
+- [x] `_update_pipeline_metadata` — atualiza `last_watermark` (modo incremental) e `last_schema_hash` após sucesso
+- [x] Instrumentação Prometheus no bloco `finally` de `run_job`
+
+### Watermark (`pipelines/watermark.py`)
+- [x] `inject_watermark(query, key, watermark, dialect)` — wrap em CTE `_siphon_base`, adiciona `WHERE key > cast_expr`; compatível com queries que já têm CTE
+- [x] `_cast_for_dialect` — mysql → `DATETIME`, postgresql/postgres → `TIMESTAMPTZ`, oracle → `TIMESTAMP WITH TIME ZONE`, mssql → `DATETIMEOFFSET`, outros → `TIMESTAMPTZ`; escapa aspas simples
+
+### Scheduler (`scheduler.py`)
+- [x] `start_scheduler()` / `stop_scheduler()` — lifecycle APScheduler com `AsyncIOScheduler` + jobstore PostgreSQL (ou memória quando sem `DATABASE_URL`)
+- [x] `sync_schedule(pipeline_id, cron, is_active)` — add/reschedule/remove job no scheduler; no-op se `_scheduler is None`
+- [x] `remove_schedule(pipeline_id)` — remove job; no-op se `_scheduler is None`
+- [x] `_parse_cron(cron)` — valida e converte string de 5 campos em kwargs APScheduler
+- [x] `_uuid_to_lock_key(str)` — `UUID.int & 0x7FFFFFFFFFFFFFFF` para advisory lock PostgreSQL
+- [x] `_fire_with_advisory_lock` — adquire `pg_try_advisory_xact_lock`; ignora disparo se lock não obtido (proteção multi-pod)
+- [x] `_async_trigger_pipeline` — carrega Pipeline + Connections do DB, constrói Job, cria `job_runs`, enfileira
+
+### Job dataclass (`models.py`)
+- [x] Novos campos: `run_id`, `pipeline_id`, `pipeline_dq`, `pipeline_schema_hash`, `schema_hash`
+
+### Testes (55 novos, 256 total)
+- [x] `test_watermark.py` — 14 testes: casts por dialeto, escape de aspas, CTE wrapping, estrutura SQL
+- [x] `test_worker_phase9.py` — 15 testes: schema hash determinismo, DQ pass/fail, `_sync_extract_and_write`, `_persist_job_run` UPDATE/INSERT, schema change warning
+- [x] `test_preview.py` — 7 testes: 404/400 connection, 400 non-SQL, query + rows, `_apply_limit` unit tests
+- [x] `test_runs.py` — 8 testes: list 200, logs 404/cursor/evicted, cancel 403/409/202
+- [x] `test_scheduler.py` — 8 testes: `_parse_cron` válido/inválido, `_uuid_to_lock_key` determinismo/range, noop sem scheduler
+
+### Pendente (pós-Fase 9)
 - [ ] Structured logging em job entries (`{"ts","job_id","pipeline_id","level","msg"}`)
-- [ ] Testes unitários: watermark injection por dialeto, schema diff, data quality bloqueando escrita, advisory lock
 - [ ] Testes de integração: pipeline incremental MySQL → MinIO com watermark, schema change detectado
 
 ---

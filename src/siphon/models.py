@@ -129,6 +129,12 @@ class Job:
     failed_files: list[str] = field(default_factory=list)
     logs: list[str] = field(default_factory=list)
     error: str | None = None
+    # Pipeline-specific fields (populated by trigger_pipeline; None for legacy /jobs)
+    run_id: int | None = None           # existing job_runs row to UPDATE on completion
+    pipeline_id: str | None = None      # UUID string; used to update watermark/schema hash
+    pipeline_dq: dict | None = None     # {min_rows_expected, max_rows_drop_pct, prev_rows}
+    pipeline_schema_hash: str | None = None  # last stored SHA-256 hash for schema evolution
+    schema_hash: str | None = None      # computed during extraction; written to job_runs
 
     def to_status(self) -> JobStatus:
         """Convert internal Job to API-facing JobStatus."""

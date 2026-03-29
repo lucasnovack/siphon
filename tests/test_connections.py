@@ -9,7 +9,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from siphon.auth.deps import Principal
-from siphon.db import get_db
 
 
 def _fernet_key():
@@ -42,13 +41,12 @@ def client(monkeypatch):
     import siphon.crypto as crypto
     importlib.reload(crypto)
 
-    from siphon.auth.deps import get_current_principal
-    from siphon.connections.router import router
+    import siphon.connections.router as cr_module
     app = FastAPI()
-    app.include_router(router)
+    app.include_router(cr_module.router)
     db_mock = AsyncMock()
-    app.dependency_overrides[get_db] = lambda: db_mock
-    app.dependency_overrides[get_current_principal] = lambda: _admin()
+    app.dependency_overrides[cr_module.get_db] = lambda: db_mock
+    app.dependency_overrides[cr_module.get_current_principal] = lambda: _admin()
     return TestClient(app), db_mock
 
 
@@ -168,17 +166,16 @@ def test_delete_connection_returns_204(client):
 
 def test_create_connection_requires_admin(monkeypatch):
     monkeypatch.setenv("SIPHON_ENCRYPTION_KEY", _fernet_key())
-    from siphon.auth.deps import get_current_principal
-    from siphon.connections.router import router
+    import siphon.connections.router as cr_module
     app = FastAPI()
-    app.include_router(router)
+    app.include_router(cr_module.router)
     db_mock = AsyncMock()
-    app.dependency_overrides[get_db] = lambda: db_mock
+    app.dependency_overrides[cr_module.get_db] = lambda: db_mock
 
     op = MagicMock()
     op.role = "operator"
     from siphon.auth.deps import Principal
-    app.dependency_overrides[get_current_principal] = lambda: Principal(type="user", user=op)
+    app.dependency_overrides[cr_module.get_current_principal] = lambda: Principal(type="user", user=op)
     tc = TestClient(app)
     resp = tc.post("/api/v1/connections", json={
         "name": "test",

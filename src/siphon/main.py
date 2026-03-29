@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
@@ -19,7 +19,10 @@ from siphon.models import ExtractRequest, Job, JobStatus, LogsResponse
 from siphon.plugins.destinations import get as get_destination
 from siphon.plugins.sources import get as get_source
 from siphon.queue import JobQueue
+from siphon.connections.router import router as connections_router
 from siphon.pipelines.router import router as pipelines_router
+from siphon.preview.router import router as preview_router
+from siphon.runs.router import router as runs_router
 from siphon.users.router import router as users_router
 
 logger = logging.getLogger(__name__)
@@ -81,7 +84,11 @@ async def _create_admin_if_missing() -> None:
 async def lifespan(app: FastAPI):
     await _create_admin_if_missing()
     queue.start()
+    from siphon.scheduler import start_scheduler
+    start_scheduler()
     yield
+    from siphon.scheduler import stop_scheduler
+    stop_scheduler()
     await queue.drain(timeout=DRAIN_TIMEOUT)
 
 
@@ -96,7 +103,10 @@ logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(auth_router)
 app.include_router(users_router)
+app.include_router(connections_router)
 app.include_router(pipelines_router)
+app.include_router(preview_router)
+app.include_router(runs_router)
 
 
 # ── Middleware ────────────────────────────────────────────────────────────────
@@ -242,5 +252,11 @@ async def health_debug() -> dict:
 
 
 @app.get("/metrics")
-async def metrics_reserved() -> dict:
-    return {}
+async def metrics_endpoint() -> Response:
+    """Expose Prometheus metrics in text format."""
+    from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
+    from siphon.metrics import queue_depth
+
+    queue_depth.set(queue.stats.get("queued", 0) + queue.stats.get("active", 0))
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
