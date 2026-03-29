@@ -1,9 +1,29 @@
 # Siphon
 
-A lightweight, self-hosted data extraction service that replaces Apache Spark in the Bronze layer of a medallion data pipeline. Siphon extracts data from SQL databases and SFTP servers and writes Parquet files directly to S3-compatible object storage.
+A lightweight, self-hosted data pipeline platform that replaces Apache Spark in the Bronze layer of a medallion architecture. Siphon manages the full lifecycle of data extraction pipelines: connection registry, scheduling, incremental watermarks, data quality checks, schema evolution detection, and Parquet writes to S3-compatible storage — all from a single container.
 
 ```
-Source (SQL / SFTP)  →  Siphon  →  S3 / MinIO (Parquet)
+Connections Registry
+        │
+        ▼
+Pipeline (source + dest + schedule + DQ)
+        │
+        ├─── APScheduler (cron, advisory lock) ───► trigger
+        └─── POST /trigger (manual) ──────────────► trigger
+                                                        │
+                                              Worker (ThreadPool)
+                                                        │
+                                          source.extract_batches()
+                                                        │
+                                        watermark injection (incremental)
+                                                        │
+                                        data quality check (before write)
+                                                        │
+                                        schema hash diff (after extract)
+                                                        │
+                                         destination.write() → S3 Parquet
+                                                        │
+                                              job_runs → PostgreSQL
 ```
 
 **Why Siphon instead of Spark?**
@@ -11,10 +31,14 @@ Source (SQL / SFTP)  →  Siphon  →  S3 / MinIO (Parquet)
 | | Spark | Siphon |
 |---|---|---|
 | Cold-start | 2–5 min | < 5s |
-| Memory for a 1M row extract | ~4 GB | ~200 MB |
-| Ops overhead | Cluster + JVM | Single container |
+| Memory (1M row extract) | ~4 GB | ~200 MB |
+| Ops overhead | Cluster + JVM tuning | Single container |
 | Deployment | KubernetesOperator + RBAC | `docker run` |
-| Oracle support | ojdbc JAR | oracledb thin mode (no Instant Client) |
+| Oracle support | ojdbc JAR + Instant Client | oracledb thin mode |
+| Connection management | External (Airflow Variables) | Built-in registry (Fernet-encrypted) |
+| Scheduling | Airflow DAGs | Built-in APScheduler + advisory lock |
+| Schema drift detection | Manual | Automatic (SHA-256, never blocks) |
+| Data quality gates | External (Great Expectations) | Built-in per-pipeline |
 
 ---
 
@@ -24,102 +48,146 @@ Source (SQL / SFTP)  →  Siphon  →  S3 / MinIO (Parquet)
 - [Architecture](#architecture)
 - [Authentication](#authentication)
 - [API Reference](#api-reference)
+  - [Legacy Job API](#legacy-job-api-airflow-compatible)
+  - [Connections](#connections-api)
+  - [Pipelines](#pipelines-api)
+  - [Preview](#preview-api)
+  - [Runs](#runs-api)
+  - [Metrics](#metrics)
 - [Configuration](#configuration)
 - [Pipeline Examples](#pipeline-examples)
 - [Variable Substitution](#variable-substitution)
+- [Incremental Mode](#incremental-mode)
+- [Schema Evolution](#schema-evolution)
+- [Data Quality](#data-quality)
 - [Plugin Reference](#plugin-reference)
 - [Writing a Custom Plugin](#writing-a-custom-plugin)
 - [Security](#security)
 - [Kubernetes](#kubernetes)
 - [Development](#development)
+- [Roadmap](#roadmap)
 
 ---
 
 ## Quick Start
 
 ```bash
-# Run with Docker Compose (includes MySQL + MinIO)
+# Start the full local stack (Siphon + PostgreSQL + MySQL + MinIO)
 docker compose up -d
 
-# Option A: authenticate with SIPHON_API_KEY (legacy / Airflow)
-curl -s -X POST http://localhost:8000/jobs \
+# 1. Create a source connection
+curl -s -X POST http://localhost:8000/api/v1/connections \
   -H "Authorization: Bearer changeme" \
   -H "Content-Type: application/json" \
   -d '{
-    "source": {
-      "type": "sql",
-      "uri": "mysql://siphon:siphon@mysql:3306/testdb",
-      "query": "SELECT * FROM orders WHERE created_at >= @LAST_MONTH"
-    },
-    "destination": {
-      "type": "s3_parquet",
+    "name": "prod-mysql",
+    "conn_type": "sql",
+    "config": {"connection": "mysql://user:pass@mysql:3306/mydb"}
+  }'
+# → {"id": "a1b2...", "name": "prod-mysql", ...}
+
+# 2. Create a destination connection
+curl -s -X POST http://localhost:8000/api/v1/connections \
+  -H "Authorization: Bearer changeme" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "minio-bronze",
+    "conn_type": "s3_parquet",
+    "config": {
       "bucket": "bronze",
-      "prefix": "bronze/orders/",
       "endpoint": "http://minio:9000",
       "access_key": "minioadmin",
       "secret_key": "minioadmin"
     }
   }'
-# → {"job_id": "3f2a..."}
 
-# Option B: authenticate with JWT (human / UI)
-TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/login \
+# 3. Create a pipeline
+curl -s -X POST http://localhost:8000/api/v1/pipelines \
+  -H "Authorization: Bearer changeme" \
   -H "Content-Type: application/json" \
-  -d '{"email":"admin@example.com","password":"secret"}' | jq -r .access_token)
+  -d '{
+    "name": "orders-daily",
+    "source_connection_id": "<src-conn-id>",
+    "dest_connection_id": "<dest-conn-id>",
+    "query": "SELECT * FROM orders WHERE updated_at > :watermark",
+    "dest_prefix": "bronze/orders/",
+    "extraction_mode": "incremental",
+    "incremental_key": "updated_at",
+    "cron": "0 3 * * *",
+    "is_active": true,
+    "min_rows_expected": 100
+  }'
 
-curl -s -X POST http://localhost:8000/jobs \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d @job.json
+# 4. Trigger manually
+curl -s -X POST http://localhost:8000/api/v1/pipelines/<pipeline-id>/trigger \
+  -H "Authorization: Bearer changeme"
+# → {"job_id": "...", "run_id": 1}
 
-# Poll until done
-curl -s http://localhost:8000/jobs/3f2a... -H "Authorization: Bearer changeme"
-# → {"status": "success", "rows_read": 42000, "rows_written": 42000}
+# 5. Watch the run
+curl -s "http://localhost:8000/api/v1/runs?pipeline_id=<pipeline-id>" \
+  -H "Authorization: Bearer changeme"
 ```
+
+**Prefer using the legacy job API directly (Airflow)?** See [Legacy Job API](#legacy-job-api-airflow-compatible) — it remains fully supported.
 
 ---
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                        FastAPI App                            │
-│                                                               │
-│  get_current_principal ── API key OR JWT access token         │
-│                                                               │
-│  POST /jobs ──► asyncio Queue ──► ThreadPoolExecutor          │
-│                                          │                    │
-│                                Worker loop per job            │
-│                                          │                    │
-│                               source.extract_batches()        │
-│                                          │                    │
-│                          (optional) parser.parse()            │
-│                                          │                    │
-│                           destination.write(batch)            │
-│                                          │                    │
-│                        _persist_job_run() → PostgreSQL        │
-└──────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                          FastAPI App                              │
+│                                                                   │
+│  get_current_principal ── API key (Airflow) OR JWT (UI/CLI)       │
+│                                                                   │
+│  /api/v1/connections ──► Connection registry (Fernet-encrypted)   │
+│  /api/v1/pipelines   ──► Pipeline CRUD + schedule sync            │
+│  /api/v1/preview     ──► Ad-hoc SQL preview (LIMIT 100)           │
+│  /api/v1/runs        ──► Run history + logs cursor + cancel       │
+│  /metrics            ──► Prometheus text (jobs, rows, queue)      │
+│                                                                   │
+│  APScheduler ──► pg_try_advisory_xact_lock ──► trigger            │
+│  POST /trigger ─────────────────────────────► trigger             │
+│                                                   │               │
+│                                     asyncio Queue + ThreadPool    │
+│                                                   │               │
+│                                           Worker per job          │
+│                                                   │               │
+│                            source.extract_batches() (streaming)   │
+│                                                   │               │
+│                            watermark injection (incremental only) │
+│                                                   │               │
+│                            _check_data_quality() → fail fast      │
+│                                                   │               │
+│                            _compute_schema_hash() → drift detect  │
+│                                                   │               │
+│                            destination.write(batch) → S3 Parquet  │
+│                                                   │               │
+│                            _persist_job_run() → PostgreSQL        │
+│                            _update_pipeline_metadata()            │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 **Key design decisions:**
 
-- Jobs are executed in a `ThreadPoolExecutor` so blocking I/O (database drivers, SFTP) does not block the event loop.
-- Sources implement `extract_batches()` — a generator that yields `pa.Table` chunks. The worker streams these directly to the destination, keeping memory bounded.
-- Destinations receive `is_first_chunk: bool` so they can decide between `delete_matching` (first) and `overwrite_or_ignore` (subsequent) write modes.
-- `rows_read == rows_written` is validated before marking a job as `success`.
+- Jobs run in a `ThreadPoolExecutor` — blocking I/O (DB drivers, SFTP) never blocks the event loop.
+- Sources implement `extract_batches()` — a generator yielding `pa.Table` chunks. Memory stays bounded regardless of table size.
+- When data quality rules are active, batches are buffered, checked in full, then written or rejected atomically.
+- `_persist_job_run` does an UPDATE when a pre-created `job_runs` row exists (trigger path), or INSERT otherwise (legacy path) — never creates duplicates.
+- APScheduler uses `pg_try_advisory_xact_lock` before each fire — safe for multi-pod / rolling deploys without Recreate strategy.
 
 ---
 
 ## Authentication
 
-Siphon supports two auth methods via the `Authorization: Bearer <token>` header:
+Siphon supports two auth methods via the same `Authorization: Bearer <token>` header:
 
 | Method | Token | Use case |
 |---|---|---|
 | **API key** | `SIPHON_API_KEY` value | Airflow service accounts, scripts |
 | **JWT** | Access token from `POST /api/v1/auth/login` | Human users, UI |
 
-Both methods use the same header — Siphon auto-detects which one is being used. Health probes (`/health/live`, `/health/ready`) are always public.
+Health probes (`/health/live`, `/health/ready`) are always public. Roles: `admin` (full CRUD) and `operator` (read + trigger only).
 
 ### Getting a JWT token
 
@@ -131,7 +199,7 @@ curl -s -X POST http://localhost:8000/api/v1/auth/login \
 # → {"access_token": "eyJ...", "token_type": "bearer"}
 # A refresh token cookie is also set (httpOnly, 7-day TTL)
 
-# Refresh access token (uses the cookie automatically)
+# Refresh (uses the httpOnly cookie automatically)
 curl -s -X POST http://localhost:8000/api/v1/auth/refresh \
   --cookie-jar cookies.txt --cookie cookies.txt
 
@@ -141,148 +209,243 @@ curl -s -X POST http://localhost:8000/api/v1/auth/logout \
   -d '{"refresh_token": "<token>"}'
 ```
 
-Access tokens expire after 15 minutes. Use `POST /api/v1/auth/refresh` to rotate. Presenting a revoked refresh token invalidates **all** sessions for that user (reuse detection).
+Access tokens expire in 15 minutes. Presenting a revoked refresh token invalidates **all** sessions for that user.
 
 ---
 
 ## API Reference
 
-All endpoints require `Authorization: Bearer <token>` (API key or JWT access token).
+All endpoints require `Authorization: Bearer <token>` unless noted.
 
-### `POST /jobs`
+---
 
-Submit an async extraction job.
+### Legacy Job API (Airflow-compatible)
+
+The original `POST /jobs` API is fully preserved — existing Airflow DAGs require no changes.
+
+#### `POST /jobs`
+
+Submit an async extraction job directly.
 
 ```bash
 curl -X POST http://localhost:8000/jobs \
   -H "Authorization: Bearer $SIPHON_API_KEY" \
   -H "Content-Type: application/json" \
-  -d @job.json
+  -d '{
+    "source": {"type": "sql", "uri": "mysql://...", "query": "SELECT * FROM orders"},
+    "destination": {"type": "s3_parquet", "bucket": "bronze", "prefix": "bronze/orders/", ...}
+  }'
+# → {"job_id": "3f2a..."}
 ```
 
-Returns `{"job_id": "<uuid>"}` immediately. The job runs in the background.
+- `202` — accepted | `429` — queue full | `401` — auth | `413` — body too large
 
-**Response codes:**
-- `202` — job accepted
-- `429` — queue is full (`SIPHON_MAX_QUEUE_SIZE` reached)
-- `401` — missing or invalid API key
-- `413` — request body too large
-
----
-
-### `POST /extract`
-
-Synchronous extraction — blocks until the job completes. Same request body as `/jobs`.
-
----
-
-### `GET /jobs/{job_id}`
-
-Poll a job's status.
-
-```bash
-curl http://localhost:8000/jobs/3f2a... -H "Authorization: Bearer $SIPHON_API_KEY"
-```
+#### `GET /jobs/{job_id}`
 
 ```json
 {
-  "job_id": "3f2a1c...",
+  "job_id": "3f2a...",
   "status": "success",
   "rows_read": 42000,
   "rows_written": 42000,
   "started_at": "2025-01-15T08:00:01Z",
-  "finished_at": "2025-01-15T08:00:14Z",
-  "failed_files": []
+  "finished_at": "2025-01-15T08:00:14Z"
 }
 ```
 
-**Status values:** `pending` → `running` → `success` | `failed` | `partial_success`
+Status: `pending` → `running` → `success` | `failed` | `partial_success`
 
-`partial_success` is returned when `fail_fast: false` is set on an SFTP source and some files could not be downloaded.
+#### `GET /jobs/{job_id}/logs`
+
+Returns `{"job_id": "...", "logs": ["[ts] [INFO] ..."]}`.
 
 ---
 
-### `GET /jobs/{job_id}/logs`
+### Connections API
 
-Stream logs for a specific job.
+Connections store encrypted credentials for sources and destinations. Config blobs are Fernet-encrypted at rest using `SIPHON_ENCRYPTION_KEY`.
+
+| Method | Endpoint | Description | Role |
+|---|---|---|---|
+| `GET` | `/api/v1/connections` | List all connections | any |
+| `GET` | `/api/v1/connections/types` | Supported connection types | any |
+| `POST` | `/api/v1/connections` | Create connection | admin |
+| `GET` | `/api/v1/connections/{id}` | Get connection (config masked) | any |
+| `PUT` | `/api/v1/connections/{id}` | Update connection | admin |
+| `DELETE` | `/api/v1/connections/{id}` | Delete connection | admin |
+| `POST` | `/api/v1/connections/{id}/test` | Test connectivity | admin |
 
 ```bash
-curl http://localhost:8000/jobs/3f2a.../logs -H "Authorization: Bearer $SIPHON_API_KEY"
+# Create a SQL source connection
+curl -X POST http://localhost:8000/api/v1/connections \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "prod-mysql",
+    "conn_type": "sql",
+    "config": {"connection": "mysql://user:pass@host:3306/mydb"}
+  }'
+
+# Test it
+curl -X POST http://localhost:8000/api/v1/connections/<id>/test \
+  -H "Authorization: Bearer $TOKEN"
+# → {"ok": true} or {"ok": false, "error": "..."}
 ```
 
-```json
-{
-  "job_id": "3f2a1c...",
-  "logs": [
-    "[2025-01-15T08:00:01Z] [INFO] Job started",
-    "[2025-01-15T08:00:14Z] [INFO] rows_read=42000 rows_written=42000"
-  ]
-}
+**Supported types:** `sql` (MySQL, PostgreSQL, MSSQL, Oracle), `s3_parquet`, `sftp`
+
+---
+
+### Pipelines API
+
+Pipelines define what to extract, where to write it, how often, and with what guardrails.
+
+| Method | Endpoint | Description | Role |
+|---|---|---|---|
+| `GET` | `/api/v1/pipelines` | List pipelines | any |
+| `POST` | `/api/v1/pipelines` | Create pipeline | admin |
+| `GET` | `/api/v1/pipelines/{id}` | Get pipeline | any |
+| `PUT` | `/api/v1/pipelines/{id}` | Update pipeline + resync schedule | admin |
+| `DELETE` | `/api/v1/pipelines/{id}` | Delete pipeline | admin |
+| `POST` | `/api/v1/pipelines/{id}/trigger` | Trigger manual run | admin, operator |
+| `GET` | `/api/v1/pipelines/{id}/runs` | Paginated run history | any |
+
+**Pipeline fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | Unique display name |
+| `source_connection_id` | uuid | Source connection |
+| `dest_connection_id` | uuid | Destination connection |
+| `query` | string | SQL query (variables and watermark injected at runtime) |
+| `dest_prefix` | string | S3 key prefix |
+| `extraction_mode` | `full_refresh` \| `incremental` | Default: `full_refresh` |
+| `incremental_key` | string | Column used for watermark filtering (incremental only) |
+| `cron` | string | 5-field cron expression (e.g. `0 3 * * *`) |
+| `is_active` | bool | Whether the schedule is active |
+| `min_rows_expected` | int | DQ: fail if fewer rows extracted |
+| `max_rows_drop_pct` | int | DQ: fail if row count drops more than N% vs previous run |
+
+```bash
+# Trigger with explicit date range (overrides watermark)
+curl -X POST http://localhost:8000/api/v1/pipelines/<id>/trigger \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"date_from": "2024-01-01T00:00:00Z", "date_to": "2024-02-01T00:00:00Z"}'
 ```
 
 ---
 
-### `GET /health`
+### Preview API
 
-Returns service metadata and current queue depth.
+Run a read-only SQL query against any `sql` connection. Always wrapped in `SELECT * FROM (...) LIMIT 100` before execution.
 
-### `GET /health/live`
+```bash
+curl -X POST http://localhost:8000/api/v1/preview \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "connection_id": "<sql-connection-id>",
+    "query": "SELECT id, name, amount FROM orders WHERE status = '\''pending'\''"
+  }'
+# → [{"id": 1, "name": "Alice", "amount": 99.5}, ...]
+```
 
-Liveness probe. Returns `200` if the process is alive.
+- `400` — not a SQL connection | `404` — connection not found
 
-### `GET /health/ready`
+---
 
-Readiness probe. Returns `503` when the queue is full.
+### Runs API
+
+Global job run history backed by PostgreSQL. In-flight run logs are served from the in-memory job queue with cursor-based pagination.
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/runs` | List all runs, newest-first (query: `?pipeline_id=`, `?status=`, `?limit=`, `?offset=`) |
+| `GET` | `/api/v1/runs/{id}` | Get a single run |
+| `GET` | `/api/v1/runs/{id}/logs` | Stream logs with cursor (`?since=<offset>`) |
+| `POST` | `/api/v1/runs/{id}/cancel` | Cancel a run (admin only) |
+
+```bash
+# Tail logs with cursor
+curl "http://localhost:8000/api/v1/runs/42/logs?since=0" -H "Authorization: Bearer $TOKEN"
+# → {"logs": ["line1", "line2"], "next_offset": 2, "done": false}
+
+# Next page
+curl "http://localhost:8000/api/v1/runs/42/logs?since=2" -H "Authorization: Bearer $TOKEN"
+```
+
+Run fields include: `job_id`, `pipeline_id`, `status`, `triggered_by` (`manual` | `schedule`), `rows_read`, `rows_written`, `duration_ms`, `schema_changed`, `error`, `started_at`, `finished_at`.
+
+---
+
+### Metrics
+
+```bash
+curl http://localhost:8000/metrics
+```
+
+Returns Prometheus text format:
+
+| Metric | Type | Labels |
+|---|---|---|
+| `siphon_jobs_total` | Counter | `status` |
+| `siphon_job_duration_seconds` | Histogram | — |
+| `siphon_rows_extracted_total` | Counter | — |
+| `siphon_queue_depth` | Gauge | — |
+| `siphon_schema_changes_total` | Counter | — |
 
 ---
 
 ## Configuration
 
-All configuration is via environment variables.
-
 **Core**
 
 | Variable | Default | Description |
 |---|---|---|
-| `SIPHON_API_KEY` | *(unset)* | Legacy API key — sent as `Authorization: Bearer <value>`. If unset, API key auth is disabled. |
+| `SIPHON_API_KEY` | *(unset)* | Legacy API key. If unset, API key auth is disabled and a warning is logged at startup. |
 | `SIPHON_PORT` | `8000` | HTTP port |
 | `SIPHON_MAX_WORKERS` | `10` | ThreadPoolExecutor max workers |
 | `SIPHON_MAX_QUEUE` | `50` | Max pending jobs before 429 |
 | `SIPHON_JOB_TIMEOUT` | `3600` | Per-job timeout in seconds |
-| `SIPHON_JOB_TTL_SECONDS` | `3600` | How long to keep finished jobs in memory |
-| `SIPHON_MAX_REQUEST_SIZE_MB` | `1` | Request body size limit (MB) |
-| `SIPHON_ALLOWED_HOSTS` | *(empty = all allowed)* | Comma-separated hostnames or CIDR blocks for SSRF guard |
-| `SIPHON_ALLOWED_S3_PREFIX` | *(empty = all allowed)* | Required path prefix for S3 writes (e.g. `bronze/`) |
+| `SIPHON_JOB_TTL_SECONDS` | `3600` | How long finished jobs stay in memory |
+| `SIPHON_MAX_REQUEST_SIZE_MB` | `1` | Request body size limit |
+| `SIPHON_ALLOWED_HOSTS` | *(all)* | Comma-separated hostnames or CIDRs for SSRF guard |
+| `SIPHON_ALLOWED_S3_PREFIX` | *(all)* | Required path prefix for S3 writes |
 | `SIPHON_S3_SCHEME` | `https` | `http` or `https` for S3 endpoint |
-| `SIPHON_MAX_FILE_SIZE_MB` | `500` | Max SFTP file size to download |
-| `SIPHON_SFTP_KNOWN_HOSTS` | *(empty)* | Path to SSH known_hosts file |
-| `SIPHON_SFTP_HOST_KEY` | *(empty)* | Base64-encoded host public key (alternative to known_hosts) |
-| `SIPHON_ENABLE_SYNC_EXTRACT` | `false` | Enable `POST /extract` (dev/debug only) |
+| `SIPHON_MAX_FILE_SIZE_MB` | `500` | Max SFTP file size |
+| `SIPHON_SFTP_KNOWN_HOSTS` | *(unset)* | Path to SSH known_hosts file |
+| `SIPHON_SFTP_HOST_KEY` | *(unset)* | Base64-encoded host public key |
+| `SIPHON_ENABLE_SYNC_EXTRACT` | `false` | Enable `POST /extract` (dev only) |
 | `SIPHON_DRAIN_TIMEOUT` | `3600` | Seconds to wait for active jobs on SIGTERM |
 
-**PostgreSQL + Auth** *(Phase 8)*
+**PostgreSQL + Auth**
 
 | Variable | Default | Description |
 |---|---|---|
-| `DATABASE_URL` | *(unset)* | PostgreSQL async URL, e.g. `postgresql+asyncpg://user:pass@host/db`. If unset, DB features return 503. |
-| `SIPHON_JWT_SECRET` | *(dev fallback — insecure)* | HMAC secret for signing JWT tokens. **Always set in production.** |
-| `SIPHON_ADMIN_EMAIL` | *(unset)* | Bootstrap admin email. Only used on first startup when no users exist. |
+| `DATABASE_URL` | *(unset)* | PostgreSQL async URL: `postgresql+asyncpg://user:pass@host/db`. DB-backed features return 503 if unset. |
+| `SIPHON_JWT_SECRET` | *(dev fallback)* | HMAC secret for JWT. **Always set in production.** |
+| `SIPHON_ADMIN_EMAIL` | *(unset)* | Bootstrap admin email (used only when no users exist). |
 | `SIPHON_ADMIN_PASSWORD` | *(unset)* | Bootstrap admin password (bcrypt-hashed at startup). |
+
+**Connections + Encryption**
+
+| Variable | Default | Description |
+|---|---|---|
+| `SIPHON_ENCRYPTION_KEY` | *(unset)* | Fernet key for encrypting connection configs at rest. Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. **Required** when using the connections API. |
 
 ---
 
 ## Pipeline Examples
 
-### SQL → Parquet (incremental daily load)
-
-Extract yesterday's rows from a MySQL table and write Parquet to MinIO:
+### Full refresh (legacy API)
 
 ```json
 {
   "source": {
     "type": "sql",
-    "uri": "mysql://user:pass@mysql-host:3306/mydb",
-    "query": "SELECT id, name, amount, created_at FROM orders WHERE DATE(created_at) = @TODAY",
+    "uri": "mysql://user:pass@mysql:3306/mydb",
+    "query": "SELECT id, name, amount FROM orders WHERE DATE(created_at) = @TODAY",
     "chunk_size": 50000
   },
   "destination": {
@@ -296,42 +459,9 @@ Extract yesterday's rows from a MySQL table and write Parquet to MinIO:
 }
 ```
 
-Variables (`@TODAY`, `@LAST_MONTH`, etc.) are resolved at job execution time — see [Variable Substitution](#variable-substitution).
-
----
-
-### SQL → Parquet (full monthly extract with partitioning)
-
-Use ConnectorX partitioned reads for large tables:
-
-```json
-{
-  "source": {
-    "type": "sql",
-    "uri": "postgresql://user:pass@pg-host:5432/mydb",
-    "query": "SELECT * FROM events WHERE created_at BETWEEN @LAST_MONTH AND @TODAY",
-    "partition_on": "id",
-    "partition_num": 8,
-    "chunk_size": 100000
-  },
-  "destination": {
-    "type": "s3_parquet",
-    "bucket": "bronze",
-    "prefix": "bronze/events/month=@LAST_MONTH/",
-    "endpoint": "http://minio:9000",
-    "access_key": "minioadmin",
-    "secret_key": "minioadmin"
-  }
-}
-```
-
-`partition_on` splits the query across `partition_num` parallel connections using ConnectorX's native partitioning. Only works with numeric or date columns.
-
----
-
 ### Oracle → Parquet
 
-Oracle uses oracledb thin mode (no Instant Client required):
+Oracle uses oracledb thin mode — no Instant Client required:
 
 ```json
 {
@@ -352,27 +482,20 @@ Oracle uses oracledb thin mode (no Instant Client required):
 }
 ```
 
----
-
-### SFTP → Parquet (with atomic file moves)
-
-Download CSV files from an SFTP server, parse them, and write to Parquet:
+### SFTP → Parquet (atomic file moves)
 
 ```json
 {
   "source": {
     "type": "sftp",
     "host": "sftp.example.com",
-    "port": 22,
     "username": "ftpuser",
     "password": "secret",
     "remote_path": "/upload",
     "parser": "csv_parser",
-    "skip_patterns": ["*.tmp", "*.lock", "archive_*"],
     "move_to_processing": "/processing",
     "move_to_processed": "/processed",
-    "fail_fast": false,
-    "chunk_size": 100
+    "fail_fast": false
   },
   "destination": {
     "type": "s3_parquet",
@@ -385,72 +508,40 @@ Download CSV files from an SFTP server, parse them, and write to Parquet:
 }
 ```
 
-With `fail_fast: false`, if some files fail (network error, parse error), the job completes with `partial_success` and `failed_files` lists the filenames that could not be processed.
-
----
-
 ### Airflow DAG integration
 
-Call the API directly with `SimpleHttpOperator`, or use the `SiphonOperator` (Fase 12, coming soon):
-
 ```python
-from datetime import datetime
-from airflow import DAG
 from airflow.providers.http.operators.http import SimpleHttpOperator
 from airflow.providers.http.sensors.http import HttpSensor
-import json
 
-with DAG(
-    dag_id="orders_to_bronze",
-    start_date=datetime(2025, 1, 1),
-    schedule_interval="0 2 * * *",
-    catchup=False,
-) as dag:
+submit = SimpleHttpOperator(
+    task_id="trigger",
+    http_conn_id="siphon_default",
+    endpoint="/api/v1/pipelines/<pipeline-id>/trigger",
+    method="POST",
+    headers={"Authorization": "Bearer {{ var.value.siphon_api_key }}"},
+    response_filter=lambda r: r.json()["run_id"],
+    do_xcom_push=True,
+)
 
-    submit_job = SimpleHttpOperator(
-        task_id="submit_extraction",
-        http_conn_id="siphon_default",   # Connection: host=http://siphon:8000
-        endpoint="/jobs",
-        method="POST",
-        headers={"Authorization": "Bearer {{ var.value.siphon_api_key }}", "Content-Type": "application/json"},
-        data=json.dumps({
-            "source": {
-                "type": "sql",
-                "uri": "mysql://{{ var.value.mysql_uri }}",
-                "query": "SELECT * FROM orders WHERE DATE(created_at) = @TODAY"
-            },
-            "destination": {
-                "type": "s3_parquet",
-                "bucket": "bronze",
-                "prefix": "bronze/orders/date={{ ds }}/",
-                "endpoint": "{{ var.value.minio_endpoint }}",
-                "access_key": "{{ var.value.minio_access_key }}",
-                "secret_key": "{{ var.value.minio_secret_key }}"
-            }
-        }),
-        response_filter=lambda r: r.json()["job_id"],
-        do_xcom_push=True,
-    )
+wait = HttpSensor(
+    task_id="wait",
+    http_conn_id="siphon_default",
+    endpoint="/api/v1/runs/{{ ti.xcom_pull(task_ids='trigger') }}",
+    headers={"Authorization": "Bearer {{ var.value.siphon_api_key }}"},
+    response_check=lambda r: r.json()["status"] in ("success", "failed"),
+    poke_interval=15,
+    mode="reschedule",
+)
 
-    wait_for_job = HttpSensor(
-        task_id="wait_for_completion",
-        http_conn_id="siphon_default",
-        endpoint="/jobs/{{ ti.xcom_pull(task_ids='submit_extraction') }}",
-        headers={"Authorization": "Bearer {{ var.value.siphon_api_key }}"},
-        response_check=lambda r: r.json()["status"] in ("success", "partial_success", "failed"),
-        poke_interval=15,
-        timeout=3600,
-        mode="reschedule",
-    )
-
-    submit_job >> wait_for_job
+submit >> wait
 ```
 
 ---
 
 ## Variable Substitution
 
-Siphon resolves variables in SQL queries and S3 prefixes at job execution time. All dates use the system timezone (set `TZ` env var to control).
+Variables in SQL queries and S3 prefixes are resolved at job execution time.
 
 | Variable | Resolves to | Example |
 |---|---|---|
@@ -459,7 +550,53 @@ Siphon resolves variables in SQL queries and S3 prefixes at job execution time. 
 | `@LAST_MONTH` | First day of last month | `2025-01-01` |
 | `@NEXT_MONTH` | First day of next month | `2025-03-01` |
 
-Variables work in SQL `WHERE` clauses, `BETWEEN` expressions, and S3 prefix strings.
+---
+
+## Incremental Mode
+
+Set `extraction_mode: incremental` and `incremental_key` on a pipeline. Siphon wraps the query with a type-aware `WHERE` clause at trigger time:
+
+```sql
+-- Original query
+SELECT id, updated_at FROM orders
+
+-- Becomes (PostgreSQL):
+WITH _siphon_base AS (
+  SELECT id, updated_at FROM orders
+)
+SELECT * FROM _siphon_base
+WHERE updated_at > CAST('2024-06-01T00:00:00+00:00' AS TIMESTAMPTZ)
+```
+
+The watermark cast adapts per dialect: `DATETIME` (MySQL), `TIMESTAMPTZ` (PostgreSQL), `TIMESTAMP WITH TIME ZONE` (Oracle), `DATETIMEOFFSET` (MSSQL).
+
+`pipelines.last_watermark` is updated **only after** the `job_runs` row is successfully persisted — avoiding the 2-phase-commit race on pod kill.
+
+---
+
+## Schema Evolution
+
+After each extraction, Siphon computes a SHA-256 hash of the Arrow schema (field names + types). If the hash differs from `pipelines.last_schema_hash`:
+
+- `job_runs.schema_changed = true`
+- A warning is appended to the run logs
+- The write proceeds normally — the schema change **never blocks** extraction
+- `pipelines.last_schema_hash` is updated after the run
+
+Engineers can query `SELECT * FROM job_runs WHERE schema_changed = true ORDER BY created_at DESC` to audit drift, or watch for the badge in the upcoming UI (Phase 10).
+
+---
+
+## Data Quality
+
+Per-pipeline optional guardrails, evaluated after extraction and before writing:
+
+| Config key | Type | Behavior on failure |
+|---|---|---|
+| `min_rows_expected` | int | Fail if `rows_read < min_rows_expected` |
+| `max_rows_drop_pct` | int | Fail if `rows_read` dropped > N% vs previous run |
+
+On failure: job is marked `failed`, no data is written to S3, error message stored in `job_runs.error`.
 
 ---
 
@@ -469,38 +606,28 @@ Variables work in SQL `WHERE` clauses, `BETWEEN` expressions, and S3 prefix stri
 
 | Field | Required | Description |
 |---|---|---|
-| `uri` | yes | Connection string: `mysql://`, `postgresql://`, `mssql://`, `oracle+oracledb://` |
-| `query` | yes | SQL query (variables resolved before execution) |
-| `chunk_size` | no | Rows per batch (default: `100000`). Not used with ConnectorX partitioning. |
-| `partition_on` | no | Column to partition by (ConnectorX only, MySQL/PG/MSSQL) |
+| `uri` | yes | `mysql://`, `postgresql://`, `mssql://`, `oracle+oracledb://` |
+| `query` | yes | SQL query |
+| `chunk_size` | no | Rows per batch (default: `100000`) |
+| `partition_on` | no | Column for ConnectorX parallel partitioning (MySQL/PG/MSSQL) |
 | `partition_num` | no | Number of partitions (default: `4`) |
-| `partition_range` | no | `[min, max]` override for partitioning |
-
-**Supported dialects and backends:**
+| `partition_range` | no | `[min, max]` override |
 
 | URI prefix | Backend |
 |---|---|
-| `mysql://` | ConnectorX (Rust, returns Arrow directly) |
-| `postgresql://` | ConnectorX |
-| `mssql://` | ConnectorX |
-| `oracle+oracledb://` | pandas + oracledb thin mode |
-
----
+| `mysql://`, `postgresql://`, `mssql://` | ConnectorX (Rust, Arrow-native) |
+| `oracle+oracledb://` | oracledb thin mode + cursor streaming |
 
 ### S3 Parquet Destination (`type: s3_parquet`)
 
 | Field | Required | Description |
 |---|---|---|
-| `bucket` | yes | S3/MinIO bucket name |
-| `prefix` | yes | Key prefix (must start with `SIPHON_ALLOWED_S3_PREFIX` if set) |
-| `endpoint` | no | Override endpoint for MinIO or other S3-compatible stores |
-| `access_key` | yes | AWS access key / MinIO user |
-| `secret_key` | yes | AWS secret key / MinIO password |
+| `bucket` | yes | S3/MinIO bucket |
+| `prefix` | yes | Key prefix |
+| `endpoint` | no | Override for MinIO / S3-compatible |
+| `access_key` | yes | AWS/MinIO access key |
+| `secret_key` | yes | AWS/MinIO secret key |
 | `region` | no | AWS region (default: `us-east-1`) |
-
-Writes `*.parquet` files using Hive-style partitioning compatible with Spark, Trino, and Athena.
-
----
 
 ### SFTP Source (`type: sftp`)
 
@@ -509,41 +636,21 @@ Writes `*.parquet` files using Hive-style partitioning compatible with Spark, Tr
 | `host` | yes | SFTP hostname |
 | `port` | no | SSH port (default: `22`) |
 | `username` | yes | SSH username |
-| `password` | no | Password auth |
-| `private_key` | no | PEM-encoded private key (alternative to password) |
-| `remote_path` | yes | Directory to list files from |
-| `parser` | yes | Parser plugin name (e.g. `csv_parser`) |
-| `skip_patterns` | no | List of fnmatch patterns to skip |
-| `move_to_processing` | no | Directory to rename files to before downloading |
-| `move_to_processed` | no | Directory to rename files to after successful download |
-| `fail_fast` | no | Stop on first error (default: `true`). Set `false` for `partial_success`. |
+| `password` / `private_key` | one of | Auth credentials |
+| `remote_path` | yes | Remote directory |
+| `parser` | yes | Parser plugin name |
+| `skip_patterns` | no | fnmatch patterns to skip |
+| `move_to_processing` / `move_to_processed` | no | Atomic file move directories |
+| `fail_fast` | no | Stop on first error (default: `true`) |
 | `chunk_size` | no | Files per Arrow batch (default: `100`) |
 
-**Security:** Siphon uses `RejectPolicy` — it will never auto-accept an unknown host key. Configure `SIPHON_SFTP_KNOWN_HOSTS` or `SIPHON_SFTP_HOST_KEY` before connecting.
+**Security:** `RejectPolicy` is hardcoded — unknown host keys are always rejected. Configure `SIPHON_SFTP_KNOWN_HOSTS` or `SIPHON_SFTP_HOST_KEY`.
 
 ---
 
 ## Writing a Custom Plugin
 
-Plugins are discovered automatically at startup from the `plugins/sources/`, `plugins/destinations/`, and `plugins/parsers/` directories.
-
-### Custom Parser (e.g. CSV)
-
-```python
-# src/siphon/plugins/parsers/csv_parser.py
-import io
-import pyarrow as pa
-import pyarrow.csv as pacsv
-from siphon.plugins.parsers import register
-from siphon.plugins.parsers.base import Parser
-
-@register("csv_parser")
-class CsvParser(Parser):
-    def parse(self, data: bytes) -> pa.Table:
-        return pacsv.read_csv(io.BytesIO(data))
-```
-
-Drop the file in the parsers directory — it will be picked up on the next restart.
+Plugins are auto-discovered at startup from `plugins/sources/`, `plugins/destinations/`, and `plugins/parsers/`. Drop a file in the right directory — no core changes needed.
 
 ### Custom Source
 
@@ -557,7 +664,6 @@ from siphon.plugins.sources.base import Source
 @register("my_source")
 class MySource(Source):
     def extract_batches(self) -> Iterator[pa.Table]:
-        # yield one pa.Table per chunk
         yield pa.table({"col": [1, 2, 3]})
 ```
 
@@ -572,9 +678,22 @@ from siphon.plugins.destinations.base import Destination
 @register("my_dest")
 class MyDestination(Destination):
     def write(self, table: pa.Table, is_first_chunk: bool) -> int:
-        # return number of rows written
         print(table.to_pandas())
         return table.num_rows
+```
+
+### Custom Parser (SFTP)
+
+```python
+# src/siphon/plugins/parsers/csv_parser.py
+import io, pyarrow as pa, pyarrow.csv as pacsv
+from siphon.plugins.parsers import register
+from siphon.plugins.parsers.base import Parser
+
+@register("csv_parser")
+class CsvParser(Parser):
+    def parse(self, data: bytes) -> pa.Table:
+        return pacsv.read_csv(io.BytesIO(data))
 ```
 
 ---
@@ -584,92 +703,79 @@ class MyDestination(Destination):
 | Threat | Mitigation |
 |---|---|
 | Unauthorized access | `Authorization: Bearer` required on all endpoints (API key or JWT) |
-| Compromised JWT secret | Startup warning if `SIPHON_JWT_SECRET` is unset; 15-min access token TTL limits blast radius |
+| Compromised JWT secret | Startup warning if unset; 15-min access token TTL |
 | Refresh token theft | Only SHA-256 hash stored in DB; raw token only in httpOnly cookie |
-| Session hijacking | Token rotation on every refresh; reuse detection revokes all sessions |
-| Brute-force login | slowapi rate limit: 10 requests/min per IP on `POST /api/v1/auth/login` |
-| Inactive account access | `is_active` checked at login and on every JWT-authenticated request |
-| Credential leakage in logs | `mask_uri()` applied to all connection strings before logging; 422 errors never log the request body |
-| SSRF via SQL connection | `_validate_host()` checks against `SIPHON_ALLOWED_HOSTS` (CIDR + hostname allowlist) |
+| Session hijacking | Rotation on every refresh; reuse detection revokes all sessions |
+| Brute-force login | slowapi: 10 req/min per IP on `POST /api/v1/auth/login` |
+| Connection credential leakage | Fernet-encrypted at rest; config masked on read endpoints |
+| SSRF via connection strings | `_validate_host()` checks against `SIPHON_ALLOWED_HOSTS` |
 | Path traversal in S3 writes | `_validate_path()` rejects `..` and paths outside `SIPHON_ALLOWED_S3_PREFIX` |
-| SFTP host spoofing | `RejectPolicy` — unknown host keys are rejected; `AutoAddPolicy` is never used |
+| SFTP host spoofing | `RejectPolicy` — `AutoAddPolicy` is never used |
 | SFTP large file bomb | Files over `SIPHON_MAX_FILE_SIZE_MB` are skipped |
-| Container privilege escalation | Non-root UID 1000 in Docker image |
-| Oversized request bodies | 413 returned for bodies over `SIPHON_MAX_REQUEST_SIZE_MB` |
-| Container vulnerabilities | Trivy scan on every CI build (CRITICAL/HIGH, ignore-unfixed) |
+| Container privilege escalation | Non-root UID 1000 |
+| Oversized request bodies | 413 for bodies over `SIPHON_MAX_REQUEST_SIZE_MB` |
+| Container vulnerabilities | Trivy scan (CRITICAL/HIGH, ignore-unfixed) on every CI build |
+| Credential leakage in logs | `mask_uri()` applied before logging; 422 errors never log the request body |
 
 ---
 
 ## Kubernetes
 
 ```yaml
-# k8s/deployment.yaml
+# k8s/deployment.yaml — safe for multi-pod thanks to APScheduler advisory lock
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: siphon
 spec:
-  replicas: 1
-  strategy:
-    type: Recreate        # one job at a time; avoid split-brain on queue
+  replicas: 2        # advisory lock prevents duplicate scheduled runs
   template:
     spec:
-      terminationGracePeriodSeconds: 600   # allow long-running jobs to drain
+      terminationGracePeriodSeconds: 600
       containers:
         - name: siphon
           image: ghcr.io/lucasnovack/siphon:latest
           ports:
             - containerPort: 8000
           env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: siphon-secrets
+                  key: database-url
             - name: SIPHON_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: siphon-secrets
                   key: api-key
+            - name: SIPHON_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: siphon-secrets
+                  key: jwt-secret
+            - name: SIPHON_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: siphon-secrets
+                  key: encryption-key
             - name: SIPHON_ALLOWED_HOSTS
               value: "10.0.0.0/8,172.16.0.0/12"
             - name: SIPHON_ALLOWED_S3_PREFIX
               value: "bronze/"
           livenessProbe:
-            httpGet:
-              path: /health/live
-              port: 8000
+            httpGet: {path: /health/live, port: 8000}
             initialDelaySeconds: 10
             periodSeconds: 15
           readinessProbe:
-            httpGet:
-              path: /health/ready
-              port: 8000
+            httpGet: {path: /health/ready, port: 8000}
             periodSeconds: 10
           resources:
-            requests:
-              memory: "256Mi"
-              cpu: "250m"
-            limits:
-              memory: "2Gi"
-              cpu: "2"
+            requests: {memory: "256Mi", cpu: "250m"}
+            limits: {memory: "2Gi", cpu: "2"}
           securityContext:
             runAsNonRoot: true
             runAsUser: 1000
             readOnlyRootFilesystem: true
-          lifecycle:
-            preStop:
-              exec:
-                command: ["/bin/sh", "-c", "sleep 5"]
-```
-
-```yaml
-# k8s/service.yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: siphon
-spec:
-  selector:
-    app: siphon
-  ports:
-    - port: 8000
-      targetPort: 8000
 ```
 
 ---
@@ -682,71 +788,81 @@ spec:
 # Install dependencies
 uv sync
 
-# Run linting
-uv run ruff check .
-uv run ruff format --check .
+# Lint
+uv run ruff check . && uv run ruff format --check .
 
-# Run unit tests
+# Unit tests (no external services)
 uv run pytest --ignore=tests/test_integration_sql.py \
               --ignore=tests/test_integration_s3.py \
               --ignore=tests/test_integration_sftp.py -v
 
-# Start local services (MySQL + MinIO + SFTP)
+# Start local services
 docker compose up -d mysql minio sftp
 
-# Run integration tests
+# Integration tests
+DATABASE_URL=postgresql+asyncpg://siphon:siphon@localhost:5432/siphon \
 SIPHON_ALLOWED_S3_PREFIX=bronze/ SIPHON_S3_SCHEME=http \
   uv run pytest tests/test_integration_sql.py \
                tests/test_integration_s3.py \
-               tests/test_integration_sftp.py \
-               -m integration -v
+               tests/test_integration_sftp.py -m integration -v
 
 # Build Docker image
 docker build -t siphon:dev .
-
-# Run the full stack locally
-docker compose up
 ```
 
 **Project layout:**
 
 ```
 src/siphon/
-├── main.py                    # FastAPI app, routes, middleware, admin bootstrap
+├── main.py                    # FastAPI app, routers, lifespan, metrics endpoint
 ├── queue.py                   # Asyncio job queue + ThreadPoolExecutor
-├── worker.py                  # Extraction loop: source → parser → destination → job_runs
-├── models.py                  # Pydantic models, mask_uri
+├── worker.py                  # Extraction loop: extract → DQ → schema hash → write → persist
+├── models.py                  # Pydantic models (Job, ExtractRequest, JobStatus, …)
 ├── variables.py               # @TODAY, @LAST_MONTH, etc.
-├── orm.py                     # SQLAlchemy ORM models (User, RefreshToken, Connection, Pipeline, Schedule, JobRun)
+├── orm.py                     # SQLAlchemy: User, Connection, Pipeline, Schedule, JobRun, RefreshToken
 ├── db.py                      # Async engine, session factory, get_db dependency
+├── crypto.py                  # Fernet encrypt/decrypt (SIPHON_ENCRYPTION_KEY)
+├── metrics.py                 # Prometheus counters/histograms
+├── scheduler.py               # APScheduler + pg_try_advisory_xact_lock
 ├── auth/
-│   ├── __init__.py
-│   ├── deps.py                # Principal + get_current_principal dual-auth dependency
-│   ├── jwt_utils.py           # JWT create/decode, refresh token, bcrypt helpers
-│   └── router.py              # POST /login, /refresh, /logout, GET /me
+│   ├── deps.py                # Principal + get_current_principal (dual-auth)
+│   ├── jwt_utils.py           # JWT create/decode, refresh token, bcrypt
+│   └── router.py              # /login, /refresh, /logout, /me
 ├── users/
-│   ├── __init__.py
-│   └── router.py              # Admin-only CRUD: GET/POST/PUT/DELETE /api/v1/users
+│   └── router.py              # Admin-only CRUD /api/v1/users
+├── connections/
+│   └── router.py              # CRUD + /test + /types
+├── pipelines/
+│   ├── router.py              # CRUD + /trigger + /runs + schedule sync
+│   └── watermark.py           # inject_watermark() + _cast_for_dialect()
+├── preview/
+│   └── router.py              # POST /api/v1/preview (LIMIT 100, SSRF guard)
+├── runs/
+│   └── router.py              # List, logs cursor, cancel
 └── plugins/
-    ├── sources/
-    │   ├── base.py            # Source ABC
-    │   ├── __init__.py        # Registry + autodiscovery
-    │   ├── sql.py             # SQLSource (ConnectorX + oracledb)
-    │   └── sftp.py            # SFTPSource (Paramiko)
-    ├── destinations/
-    │   ├── base.py            # Destination ABC
-    │   ├── __init__.py        # Registry + autodiscovery
-    │   └── s3_parquet.py      # S3ParquetDestination (PyArrow)
-    └── parsers/
-        ├── base.py            # Parser ABC
-        ├── __init__.py        # Registry + autodiscovery
-        └── example_parser.py  # Stub: bytes → pa.Table with raw column
+    ├── sources/               # sql.py (ConnectorX + oracledb), sftp.py
+    ├── destinations/          # s3_parquet.py
+    └── parsers/               # example_parser.py (stub)
 
-alembic/
-├── env.py                     # Async migration runner
-└── versions/
-    └── 001_initial_schema.py  # Creates all 6 tables
+alembic/versions/
+├── 001_initial_schema.py      # users, connections, pipelines, schedules, job_runs, refresh_tokens
+└── 002_add_dest_connection_triggered_by.py
 ```
+
+---
+
+## Roadmap
+
+| Phase | Status | Description |
+|---|---|---|
+| 1–6 | ✅ | Core extraction engine: queue, worker, SQL/SFTP/S3 plugins, variable substitution |
+| 7 | ✅ | Hotfixes: TTL eviction, SFTP atomic moves, `/extract` guard |
+| 7.5 | ✅ | Oracle cursor streaming (no pandas, oracledb native fetchmany) |
+| 8 | ✅ | PostgreSQL persistence + JWT auth + token rotation + user management |
+| **9** | ✅ | **Connections + Pipelines API, APScheduler, incremental watermarks, DQ, schema evolution, preview, runs, Prometheus** |
+| 10 | 🔜 | React UI: pipeline wizard, query editor (CodeMirror), run history, schema drift badge |
+| 11 | ⏳ | Kubernetes manifests (deployment, service, HPA) |
+| 12 | ⏳ | Airflow SiphonOperator package |
 
 ---
 
