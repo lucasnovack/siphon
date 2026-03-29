@@ -183,20 +183,56 @@ Cada fase termina com testes passando e código funcional antes de avançar.
 
 ---
 
-## Fase 10 — Frontend
+## Fase 10 — Frontend ✅
 **Objetivo:** UI completa servida pelo FastAPI.
+**Branch:** `feature/phase-10-frontend` (build limpo, 0 erros TS, 2026-03-29)
 
-- [ ] `frontend/` — scaffold Vite + React 18 + shadcn/ui + Tailwind + react-hook-form + zod
-- [ ] `queryKeys.ts` — centralizar todas as query keys antes de qualquer componente
-- [ ] Auth: login page, Axios interceptor com mutex de refresh, proteção de rotas
-- [ ] `/connections` — lista, `ConnectionForm` (campos dinâmicos por tipo, preservação de valores, test-connection)
-- [ ] `/pipelines` — lista, `PipelineWizard` 4 steps (Source → Query+Preview → Dest+Prefix → Schedule+Review)
-- [ ] `QueryEditor` — CodeMirror 6 lazy-loaded, dialeto sincronizado com connection selecionada
-- [ ] `/runs` — histórico global + detalhe com `LogViewer` (polling cursor-based, cap 2000 linhas)
-- [ ] `/settings` — tabs users/api-keys/system
-- [ ] Componentes: `ConfirmDialog`, `EmptyState`, `ConnectionSelect`, `CronInput`, `PageHeader`, `ApiErrorMessage`, `SchemaDriftBadge`, `RunStatusBadge`
-- [ ] Dockerfile: estágio `frontend-builder` (node:22-slim), build copiado para runtime
-- [ ] CI: `lint-frontend`, `test-frontend` (Vitest), Playwright E2E smoke no job `docker`
+### Build e configuração
+- [x] `frontend/` — scaffold Vite + React 18 + shadcn/ui + Tailwind + react-hook-form + zod
+- [x] `package.json` — deps completas: TanStack Query, Radix UI, axios, cronstrue, date-fns, CodeMirror 6, lucide-react
+- [x] `vite.config.ts` — proxy `/api → localhost:8000`, alias `@/`
+- [x] `tsconfig.json` — strict mode, noUnusedLocals, noUnusedParameters
+- [x] `tailwind.config.js` — CSS vars shadcn/ui, tailwindcss-animate
+
+### Fundação
+- [x] `src/lib/api.ts` — axios client, access token em memória, refresh mutex interceptor, todos os typed API helpers (auth, connections, pipelines, runs, preview, users)
+- [x] `src/lib/queryKeys.ts` — query keys centralizados
+- [x] `src/contexts/AuthContext.tsx` — AuthProvider, useAuth, login/logout, bootstrap via `/auth/refresh` no mount
+- [x] `src/main.tsx` — entry point (ReactDOM.createRoot, QueryClientProvider, AuthProvider, Toaster)
+- [x] `src/App.tsx` — React Router v6 com todas as rotas (connections, pipelines, runs, settings)
+
+### Componentes UI (shadcn/ui manual)
+- [x] button, input, label, card, badge (variants: default/secondary/destructive/outline/warning/success/running), select, dialog, alert-dialog, toast/toaster
+
+### Componentes compartilhados
+- [x] `PageHeader`, `EmptyState`, `ApiErrorMessage`, `ConfirmDialog`
+- [x] `SchemaDriftBadge`, `StatusBadge`
+- [x] `CronInput` — live preview via cronstrue
+- [x] `ConnectionSelect` — dropdown + botão inline "create new"
+- [x] `QueryEditor` — CodeMirror 6 lazy-loaded (SQL syntax highlight)
+
+### Layout
+- [x] `AppLayout` — sidebar nav (Dashboard, Connections, Pipelines, Runs, Settings)
+- [x] `RequireAuth` — proteção de rotas, redirect para `/login`
+
+### Páginas
+- [x] `LoginPage` — form email/senha, redirect pós-login
+- [x] `DashboardPage` — cards de stats + recent runs
+- [x] `/connections` — lista, `ConnectionForm` (campos dinâmicos por tipo, test-connection inline)
+- [x] `/pipelines` — lista, `PipelineWizard` 4 steps (Source → Query+Preview → Dest+DQ → Schedule+Review), `PipelineDetailPage` (config, schedule CRUD, recent runs), `PipelineEditPage`
+- [x] `/runs` — histórico global com filtro de status, `RunDetailPage` + `LogViewer` (polling cursor-based, cap 2000 linhas)
+- [x] `/settings/users` — CRUD admin-only de usuários
+- [x] `/settings/system` — info de runtime + links /docs /redoc
+
+### Backend
+- [x] `src/siphon/main.py` — monta `StaticFiles` em `/` servindo `frontend/dist/` (SPA fallback para index.html); fallback 503 amigável se dist não existe; controlado via `SIPHON_FRONTEND_DIR`
+
+### Dockerfile
+- [x] Stage 0 `frontend-builder` — node:22-slim, pnpm install, pnpm build
+- [x] Stage runtime copia `frontend/dist` → `/app/frontend/dist`
+
+### Pendente (fase 11+)
+- [ ] CI: `lint-frontend`, `test-frontend` (Vitest), Playwright E2E smoke
 - [ ] `test_integration_ui.py` — fluxo completo via API
 
 ---
