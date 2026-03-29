@@ -1551,40 +1551,51 @@ tag v*:
 
 ## 17. Definition of Done (v1)
 
-- [ ] `POST /jobs` + polling works end-to-end for a MySQL source → MinIO Parquet destination
-- [ ] `POST /jobs` + polling works end-to-end for an SFTP source (with a stub parser) → MinIO Parquet destination
-- [ ] Queue correctly limits concurrency and returns 429 when full
-- [ ] `GET /jobs/{id}` returns status and logs
-- [ ] `GET /health` returns active/max worker counts
-- [ ] `@TODAY`, `@MIN_DATE`, `@LAST_MONTH`, `@NEXT_MONTH` are resolved before SQL execution
-- [ ] A second source plugin can be added by creating one file in `plugins/sources/` with zero changes to core
-- [ ] A second destination plugin can be added by creating one file in `plugins/destinations/` with zero changes to core
-- [ ] Docker image builds successfully and is under 500MB
-- [ ] README covers: quickstart, API reference, how to write a plugin
-- [ ] Ruff passes with no violations
-- [ ] Unit tests cover: variable resolution, plugin registry, queue 429 behavior
-- [ ] Integration test (docker-compose) covers: MySQL → MinIO Parquet end-to-end
-- [ ] `pytest` passes with no failures
-- [ ] `GET /health/live` returns 200; `GET /health/ready` returns 503 when queue is full
-- [ ] SIGTERM triggers graceful drain — in-flight jobs complete before process exits
-- [ ] Docker image runs as non-root user (UID 1000)
-- [ ] `docker-compose.yml` starts full local dev environment (siphon + mysql + postgres + minio)
-- [ ] `k8s/deployment.yaml` deploys successfully to a Kubernetes cluster
-- [ ] `SIPHON_S3_SCHEME=https` works with a TLS MinIO endpoint
-- [ ] CI pipeline runs ruff + pytest + docker build + trivy scan on every PR
-- [ ] `SIPHON_API_KEY` configurado: rotas retornam 401 sem o header correto (exceto `/health/live` e `/health/ready`)
-- [ ] `SIPHON_ALLOWED_HOSTS` configurado: connection string para host fora da lista retorna 400
-- [ ] `SIPHON_ALLOWED_S3_PREFIX` configurado: path fora do prefixo retorna 400
-- [ ] Request body > 1MB retorna 413
-- [ ] Erro de validação (422) não loga nem retorna a connection string ou credenciais
-- [ ] Conexão SFTP com `AutoAddPolicy` não é possível — código usa `RejectPolicy` hardcoded
-- [ ] Startup sem `SIPHON_API_KEY` loga warning visível
+<!-- Fases 1–8 completas e mergeadas em master. Fase 9 em progresso (branch feature/phase-9-connections-pipelines-api). -->
+
+- [x] `POST /jobs` + polling works end-to-end for a MySQL source → MinIO Parquet destination
+- [x] `POST /jobs` + polling works end-to-end for an SFTP source (with a stub parser) → MinIO Parquet destination
+- [x] Queue correctly limits concurrency and returns 429 when full
+- [x] `GET /jobs/{id}` returns status and logs
+- [x] `GET /health` returns active/max worker counts
+- [x] `@TODAY`, `@MIN_DATE`, `@LAST_MONTH`, `@NEXT_MONTH` are resolved before SQL execution
+- [x] A second source plugin can be added by creating one file in `plugins/sources/` with zero changes to core
+- [x] A second destination plugin can be added by creating one file in `plugins/destinations/` with zero changes to core
+- [x] Docker image builds successfully and is under 500MB
+- [x] README covers: quickstart, API reference, how to write a plugin
+- [x] Ruff passes with no violations
+- [x] Unit tests cover: variable resolution, plugin registry, queue 429 behavior
+- [x] Integration test (docker-compose) covers: MySQL → MinIO Parquet end-to-end
+- [x] `pytest` passes with no failures
+- [x] `GET /health/live` returns 200; `GET /health/ready` returns 503 when queue is full
+- [x] SIGTERM triggers graceful drain — in-flight jobs complete before process exits
+- [x] Docker image runs as non-root user (UID 1000)
+- [x] `docker-compose.yml` starts full local dev environment (siphon + mysql + postgres + minio)
+- [ ] `k8s/deployment.yaml` deploys successfully to a Kubernetes cluster _(Fase 11)_
+- [x] `SIPHON_S3_SCHEME=https` works with a TLS MinIO endpoint
+- [x] CI pipeline runs ruff + pytest + docker build + trivy scan on every PR
+- [x] `SIPHON_API_KEY` configurado: rotas retornam 401 sem o header correto (exceto `/health/live` e `/health/ready`)
+- [x] `SIPHON_ALLOWED_HOSTS` configurado: connection string para host fora da lista retorna 400
+- [x] `SIPHON_ALLOWED_S3_PREFIX` configurado: path fora do prefixo retorna 400
+- [x] Request body > 1MB retorna 413
+- [x] Erro de validação (422) não loga nem retorna a connection string ou credenciais
+- [x] Conexão SFTP com `AutoAddPolicy` não é possível — código usa `RejectPolicy` hardcoded
+- [x] Startup sem `SIPHON_API_KEY` loga warning visível
 
 ---
 
 ## 18. UI & Management Layer (Phases 7–10)
 
 Full design spec: `docs/superpowers/specs/2026-03-25-siphon-ui-design.md`
+
+**Status de implementação:**
+| Fase | Status | Branch/Commit |
+|---|---|---|
+| 7 — Hotfixes críticos | ✅ mergeado em `master` | `hotfix/phase-7` |
+| 7.5 — Oracle cursor streaming | ✅ mergeado em `master` | `feature/phase-7.5-oracle-cursor-streaming` |
+| 8 — PostgreSQL + Auth | ✅ mergeado em `master` (183 testes) | `feature/phase-8-postgres-auth`, 2026-03-28 |
+| 9 — Connections + Pipelines API | 🔄 em progresso (201 testes) | `feature/phase-9-connections-pipelines-api`, 2026-03-29 |
+| 10 — Frontend | ⏳ não iniciado | — |
 
 ### Overview
 

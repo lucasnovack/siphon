@@ -98,6 +98,17 @@ Cada fase termina com testes passando e código funcional antes de avançar.
 
 ---
 
+## Fase 7.5 — Oracle cursor streaming ✅
+**Objetivo:** Oracle usa cursor nativo com fetchmany() em vez de pandas, sem quebrar tipagem.
+
+- [x] `_extract_oracle()` — substituir pandas `read_sql` por `cursor.fetchmany(chunk_size)` nativo oracledb
+- [x] `_oracle_output_type_handler()` — mapeamento de tipos Oracle → Python (LOB, NUMBER, DATE)
+- [x] `_oracle_rows_to_arrow()` — conversão row-list → pa.Table preservando tipos
+- [x] Testes unitários: LOB handler, tipo-fidelidade NUMBER/DATE, streaming em chunks
+- [x] PR mergeado: branch `feature/phase-7.5-oracle-cursor-streaming` → `master`
+
+---
+
 ## Fase 8 — PostgreSQL + Auth ✅
 **Objetivo:** persistência e autenticação JWT prontas. Zero lógica de negócio nova ainda.
 
@@ -112,24 +123,32 @@ Cada fase termina com testes passando e código funcional antes de avançar.
 - [x] Startup: criar usuário admin se nenhum existir (`SIPHON_ADMIN_EMAIL` + `SIPHON_ADMIN_PASSWORD`)
 - [x] `worker.py` — persistir resultado em `job_runs` ao finalizar job
 - [x] Testes unitários: login/refresh/logout, token rotation, dual-auth, admin CRUD
-- [x] PR aberto: `feature/phase-8-postgres-auth` (183 testes passando)
+- [x] PR mergeado: `feature/phase-8-postgres-auth` → `master` (183 testes passando, 2026-03-28)
 
 ---
 
-## Fase 9 — Connections + Pipelines API
+## Fase 9 — Connections + Pipelines API 🔄
 **Objetivo:** toda a lógica de negócio da UI exposta via API. Frontend ainda não existe.
+**Branch:** `feature/phase-9-connections-pipelines-api` (201 testes passando, 2026-03-29)
 
-- [ ] `connections/` router — CRUD, Fernet encryption/decryption, `POST /test`, `GET /types`
-- [ ] `pipelines/` router — CRUD, `POST /:id/trigger` (com `date_from`/`date_to`), `GET /:id/runs`, schedule upsert/delete
+- [x] `crypto.py` — Fernet encrypt/decrypt com `SIPHON_ENCRYPTION_KEY`
+- [x] Migration 002 — `dest_connection_id` em `pipelines`, `triggered_by` em `job_runs`
+- [x] `connections/` router — CRUD, Fernet encryption/decryption, `POST /test`, `GET /types`
+- [x] `pipelines/` router — CRUD (name 409, admin-only writes), `GET /:id/runs` paginado, schedule upsert/delete
+- [x] `POST /api/v1/pipelines/:id/trigger` — monta ExtractRequest a partir de connections, enfileira job, persiste `job_runs`
+- [x] Injeção de watermark no trigger (`siphon.pipelines.watermark.inject_watermark`) — chamada no `trigger_pipeline`, módulo ainda a implementar
+- [x] `pipelines_router` registrado em `main.py`
+- [x] Testes unitários: connections (CRUD, 409, Fernet, test endpoint), pipelines (CRUD, 403 operator, schedule upsert), 201 testes passando
+- [ ] `siphon/pipelines/watermark.py` — injeção tipo-aware por dialeto (mysql/postgres/oracle/mssql)
+- [ ] `siphon/scheduler.py` — APScheduler com jobstore PostgreSQL + `pg_try_advisory_xact_lock`
 - [ ] `preview/` router — `POST /api/v1/preview` com `LIMIT 100`, passa por `_validate_host()`
-- [ ] `runs/` router — histórico paginado, logs com cursor, `POST /:id/cancel`
-- [ ] Modo incremental: injeção de watermark tipo-aware por dialeto, atualização apenas após `job_runs` persistido
-- [ ] Schema evolution: SHA-256 do Arrow schema, comparação com `pipelines.last_schema_hash`, `schema_changed` em `job_runs`, log de warning
-- [ ] Data quality: `min_rows_expected` e `max_rows_drop_pct` — verificados após extração, antes de escrita
-- [ ] APScheduler com jobstore PostgreSQL + `pg_try_advisory_xact_lock` antes de cada disparo
+- [ ] `runs/` router — histórico global paginado, logs com cursor, `POST /:id/cancel`
+- [ ] Schema evolution: SHA-256 do Arrow schema em `worker.py`, comparação com `pipelines.last_schema_hash`, `schema_changed` em `job_runs`
+- [ ] Data quality: `min_rows_expected` e `max_rows_drop_pct` verificados após extração, antes de escrita S3
+- [ ] Watermark update: atualizar `pipelines.last_watermark` apenas após `job_runs` persistido com sucesso
 - [ ] `GET /metrics` — Prometheus (`prometheus-client`): jobs_total, duration_histogram, rows_total, queue_depth, schema_changes_total
 - [ ] Structured logging em job entries (`{"ts","job_id","pipeline_id","level","msg"}`)
-- [ ] Testes unitários: criptografia de connection, watermark injection, schema diff, data quality bloqueando escrita, advisory lock
+- [ ] Testes unitários: watermark injection por dialeto, schema diff, data quality bloqueando escrita, advisory lock
 - [ ] Testes de integração: pipeline incremental MySQL → MinIO com watermark, schema change detectado
 
 ---

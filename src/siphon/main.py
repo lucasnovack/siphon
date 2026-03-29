@@ -19,6 +19,7 @@ from siphon.models import ExtractRequest, Job, JobStatus, LogsResponse
 from siphon.plugins.destinations import get as get_destination
 from siphon.plugins.sources import get as get_source
 from siphon.queue import JobQueue
+from siphon.pipelines.router import router as pipelines_router
 from siphon.users.router import router as users_router
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,7 @@ logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(auth_router)
 app.include_router(users_router)
+app.include_router(pipelines_router)
 
 
 # ── Middleware ────────────────────────────────────────────────────────────────
