@@ -50,6 +50,12 @@ class TriggerRequest(BaseModel):
     date_to: str | None = None
 
 
+class ScheduleResponse(BaseModel):
+    cron_expr: str
+    is_active: bool
+    next_run_at: datetime | None
+
+
 class PipelineResponse(BaseModel):
     id: str
     name: str
@@ -63,11 +69,20 @@ class PipelineResponse(BaseModel):
     last_schema_hash: str | None
     min_rows_expected: int | None
     max_rows_drop_pct: int | None
+    is_active: bool
+    schedule: ScheduleResponse | None
     created_at: datetime
     updated_at: datetime
 
 
-def _to_response(p: Pipeline) -> PipelineResponse:
+def _to_response(p: Pipeline, schedule: Schedule | None = None) -> PipelineResponse:
+    sched = None
+    if schedule:
+        sched = ScheduleResponse(
+            cron_expr=schedule.cron,
+            is_active=schedule.is_active,
+            next_run_at=schedule.next_run_at,
+        )
     return PipelineResponse(
         id=str(p.id),
         name=p.name,
@@ -81,6 +96,8 @@ def _to_response(p: Pipeline) -> PipelineResponse:
         last_schema_hash=p.last_schema_hash,
         min_rows_expected=p.min_rows_expected,
         max_rows_drop_pct=p.max_rows_drop_pct,
+        is_active=True,
+        schedule=sched,
         created_at=p.created_at,
         updated_at=p.updated_at,
     )
@@ -374,7 +391,7 @@ async def get_pipeline_runs(
     )
     return [
         {
-            "id": r.id,
+            "id": r.job_id,
             "job_id": r.job_id,
             "status": r.status,
             "triggered_by": r.triggered_by,

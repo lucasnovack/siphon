@@ -26,13 +26,12 @@ case "${1:-}" in
     $COMPOSE ps
     echo ""
     echo "UI: http://localhost:8000"
-    echo "MinIO: http://localhost:9001  (minioadmin / minioadmin)"
     ;;
   stop)
-    $COMPOSE down
+    $COMPOSE down --remove-orphans --timeout 10
     ;;
   restart)
-    $COMPOSE down
+    $COMPOSE down --remove-orphans --timeout 10
     $COMPOSE up -d --build
     ;;
   logs)

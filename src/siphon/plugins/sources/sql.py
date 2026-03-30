@@ -120,8 +120,14 @@ class SQLSource(Source):
 
 
 def _inject_timeout(conn: str) -> str:
-    """Inject connect_timeout into connection string if not present."""
+    """Inject connect_timeout into connection string for PostgreSQL only.
+
+    ConnectorX's MySQL driver does not support connect_timeout as a URL parameter.
+    Only PostgreSQL (libpq-backed) supports it.
+    """
     parsed = urlparse(conn)
+    if not parsed.scheme.startswith("postgres"):
+        return conn
     params = parse_qs(parsed.query)
     if "connect_timeout" not in params and "connectTimeout" not in params:
         separator = "&" if parsed.query else ""

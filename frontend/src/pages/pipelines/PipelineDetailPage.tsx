@@ -92,7 +92,7 @@ export function PipelineDetailPage() {
           </Row>
           {pipeline.incremental_key && <Row label="Incremental Key"><code className="font-mono">{pipeline.incremental_key}</code></Row>}
           {pipeline.last_watermark && <Row label="Last Watermark"><code className="font-mono text-xs">{pipeline.last_watermark}</code></Row>}
-          <Row label="Destination Prefix"><code className="font-mono">{pipeline.dest_prefix}</code></Row>
+          <Row label="Destination Prefix"><code className="font-mono">{pipeline.destination_path}</code></Row>
           {pipeline.min_rows_expected && <Row label="Min Rows">{pipeline.min_rows_expected.toLocaleString()}</Row>}
           {pipeline.max_rows_drop_pct && <Row label="Max Drop %">{pipeline.max_rows_drop_pct}%</Row>}
         </CardContent>

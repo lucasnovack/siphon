@@ -6,6 +6,7 @@ import { DashboardPage } from '@/pages/DashboardPage'
 import { ConnectionsPage } from '@/pages/connections/ConnectionsPage'
 import { ConnectionNewPage } from '@/pages/connections/ConnectionNewPage'
 import { ConnectionDetailPage } from '@/pages/connections/ConnectionDetailPage'
+import { ConnectionEditPage } from '@/pages/connections/ConnectionEditPage'
 import { PipelinesPage } from '@/pages/pipelines/PipelinesPage'
 import { PipelineWizard } from '@/pages/pipelines/PipelineWizard'
 import { PipelineDetailPage } from '@/pages/pipelines/PipelineDetailPage'
@@ -34,6 +35,7 @@ export default function App() {
             <Route index element={<ConnectionsPage />} />
             <Route path="new" element={<ConnectionNewPage />} />
             <Route path=":id" element={<ConnectionDetailPage />} />
+            <Route path=":id/edit" element={<ConnectionEditPage />} />
           </Route>
 
           <Route path="pipelines">
