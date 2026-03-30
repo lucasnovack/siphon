@@ -12,11 +12,11 @@ import { EmptyState } from '@/components/shared/EmptyState'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Card, CardContent } from '@/components/ui/card'
 
-const STATUS_OPTIONS = ['', 'queued', 'running', 'success', 'failed', 'partial_success'] as const
+const STATUS_OPTIONS = ['queued', 'running', 'success', 'failed', 'partial_success'] as const
 
 export function RunsPage() {
-  const [statusFilter, setStatusFilter] = useState('')
-  const params = { limit: 50, ...(statusFilter ? { status: statusFilter } : {}) }
+  const [statusFilter, setStatusFilter] = useState('all')
+  const params = { limit: 50, ...(statusFilter !== 'all' ? { status: statusFilter } : {}) }
 
   const { data, isLoading } = useQuery({
     queryKey: queryKeys.runs.list(params),
@@ -38,8 +38,8 @@ export function RunsPage() {
               <SelectValue placeholder="All statuses" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">All statuses</SelectItem>
-              {STATUS_OPTIONS.filter(Boolean).map((s) => (
+              <SelectItem value="all">All statuses</SelectItem>
+              {STATUS_OPTIONS.map((s) => (
                 <SelectItem key={s} value={s}>{s}</SelectItem>
               ))}
             </SelectContent>
