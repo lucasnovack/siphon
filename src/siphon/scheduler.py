@@ -43,7 +43,10 @@ def start_scheduler() -> None:
         from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
         from apscheduler.schedulers.background import BackgroundScheduler
 
-        jobstore = SQLAlchemyJobStore(url=database_url)
+        # APScheduler uses synchronous SQLAlchemy — strip the async driver
+        # so psycopg2 is used instead of asyncpg.
+        sync_url = database_url.replace("postgresql+asyncpg://", "postgresql://")
+        jobstore = SQLAlchemyJobStore(url=sync_url)
         _scheduler = BackgroundScheduler(jobstores={"default": jobstore})
         _scheduler.start()
         logger.info("Scheduler started with PostgreSQL jobstore")

@@ -16,8 +16,9 @@ FROM python:3.12-slim AS builder
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /app
-COPY pyproject.toml uv.lock README.md ./
+COPY pyproject.toml uv.lock README.md alembic.ini ./
 COPY src/ ./src/
+COPY alembic/ ./alembic/
 
 # Install dependencies into /app/.venv — no cache, no dev deps
 RUN uv sync --frozen --no-dev --no-cache
@@ -33,6 +34,8 @@ WORKDIR /app
 # Copy only the virtualenv and source — no uv, no pip cache, no build artifacts
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/src /app/src
+COPY --from=builder /app/alembic /app/alembic
+COPY --from=builder /app/alembic.ini /app/alembic.ini
 COPY --from=frontend-builder /frontend/dist /app/frontend/dist
 
 ENV PATH="/app/.venv/bin:$PATH" \

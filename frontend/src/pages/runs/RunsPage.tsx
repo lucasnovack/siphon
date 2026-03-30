@@ -16,9 +16,7 @@ const STATUS_OPTIONS = ['', 'queued', 'running', 'success', 'failed', 'partial_s
 
 export function RunsPage() {
   const [statusFilter, setStatusFilter] = useState('')
-  const [page] = useState(1)
-
-  const params = { page, limit: 50, ...(statusFilter ? { status: statusFilter } : {}) }
+  const params = { limit: 50, ...(statusFilter ? { status: statusFilter } : {}) }
 
   const { data, isLoading } = useQuery({
     queryKey: queryKeys.runs.list(params),
@@ -27,7 +25,7 @@ export function RunsPage() {
     refetchIntervalInBackground: false,
   })
 
-  const runs = data?.items ?? []
+  const runs = data ?? []
 
   return (
     <div>

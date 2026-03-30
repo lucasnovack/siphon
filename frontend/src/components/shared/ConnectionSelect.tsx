@@ -24,12 +24,12 @@ export function ConnectionSelect({
 }: ConnectionSelectProps) {
   const { data } = useQuery({
     queryKey: queryKeys.connections.list(1, 200),
-    queryFn: () => connectionsApi.list(1, 200).then((r) => r.data),
+    queryFn: () => connectionsApi.list().then((r) => r.data),
   })
 
   const options = filterType
-    ? (data?.items ?? []).filter((c) => c.type === filterType)
-    : (data?.items ?? [])
+    ? (data ?? []).filter((c) => c.type === filterType)
+    : (data ?? [])
 
   return (
     <div className="space-y-1">

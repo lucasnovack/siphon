@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { Database, Plus, Trash2 } from 'lucide-react'
@@ -15,11 +14,9 @@ import { toast } from '@/hooks/use-toast'
 export function ConnectionsPage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
-  const [page] = useState(1)
-
   const { data, isLoading } = useQuery({
-    queryKey: queryKeys.connections.list(page, 50),
-    queryFn: () => connectionsApi.list(page, 50).then((r) => r.data),
+    queryKey: queryKeys.connections.all,
+    queryFn: () => connectionsApi.list().then((r) => r.data),
   })
 
   const deleteMutation = useMutation({
@@ -31,7 +28,7 @@ export function ConnectionsPage() {
     onError: () => toast({ title: 'Failed to delete connection', variant: 'destructive' }),
   })
 
-  const connections = data?.items ?? []
+  const connections = data ?? []
 
   return (
     <div>
