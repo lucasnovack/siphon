@@ -31,7 +31,7 @@ export function PipelineDetailPage() {
 
   const { data: runs } = useQuery({
     queryKey: queryKeys.pipelines.runs(id!, 1, 10),
-    queryFn: () => pipelinesApi.runs(id!, 1, 10).then((r) => r.data),
+    queryFn: () => pipelinesApi.runs(id!, 10).then((r) => r.data),
     enabled: !!id,
     refetchInterval: 10_000,
     refetchIntervalInBackground: false,
@@ -92,7 +92,7 @@ export function PipelineDetailPage() {
           </Row>
           {pipeline.incremental_key && <Row label="Incremental Key"><code className="font-mono">{pipeline.incremental_key}</code></Row>}
           {pipeline.last_watermark && <Row label="Last Watermark"><code className="font-mono text-xs">{pipeline.last_watermark}</code></Row>}
-          <Row label="Destination Prefix"><code className="font-mono">{pipeline.dest_prefix}</code></Row>
+          <Row label="Destination Prefix"><code className="font-mono">{pipeline.destination_path}</code></Row>
           {pipeline.min_rows_expected && <Row label="Min Rows">{pipeline.min_rows_expected.toLocaleString()}</Row>}
           {pipeline.max_rows_drop_pct && <Row label="Max Drop %">{pipeline.max_rows_drop_pct}%</Row>}
         </CardContent>
@@ -153,11 +153,11 @@ export function PipelineDetailPage() {
           </div>
         </CardHeader>
         <CardContent>
-          {(runs?.items ?? []).length === 0 ? (
+          {(runs ?? []).length === 0 ? (
             <p className="text-sm text-muted-foreground py-2">No runs yet.</p>
           ) : (
             <div className="divide-y">
-              {(runs?.items ?? []).map((run) => (
+              {(runs ?? []).map((run) => (
                 <div key={run.id} className="flex items-center justify-between py-2">
                   <div>
                     <Link to={`/runs/${run.id}`} className="text-sm font-mono hover:underline text-primary">

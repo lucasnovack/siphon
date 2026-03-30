@@ -127,6 +127,12 @@ async def request_size_limit(request: Request, call_next):
 # ── Exception handlers ────────────────────────────────────────────────────────
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    import logging
+    body = await request.body()
+    logging.getLogger("siphon.validation").error(
+        "422 on %s %s — body=%s — errors=%s",
+        request.method, request.url.path, body.decode(errors="replace"), exc.errors()
+    )
     safe_errors = [{k: v for k, v in err.items() if k != "input"} for err in exc.errors()]
     return JSONResponse(
         status_code=422,

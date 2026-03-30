@@ -86,7 +86,7 @@ export interface Connection {
   id: string
   name: string
   type: 'sql' | 'sftp' | 's3_parquet'
-  created_by: string
+  key_version: number
   created_at: string
   updated_at: string
 }
@@ -94,7 +94,10 @@ export interface Connection {
 export interface ConnectionTypeField {
   name: string
   type: string
-  required: boolean
+  label?: string
+  required?: boolean
+  secret?: boolean
+  placeholder?: string
 }
 
 export interface ConnectionType {
@@ -105,19 +108,17 @@ export interface ConnectionType {
 export interface Pipeline {
   id: string
   name: string
-  source_conn: string
-  source_query: string
-  dest_conn: string
-  dest_prefix: string
+  source_connection_id: string
+  dest_connection_id: string | null
+  query: string
+  destination_path: string
   extraction_mode: 'full_refresh' | 'incremental'
   incremental_key: string | null
   last_watermark: string | null
   last_schema_hash: string | null
-  options: Record<string, unknown> | null
   min_rows_expected: number | null
   max_rows_drop_pct: number | null
   is_active: boolean
-  created_by: string
   created_at: string
   updated_at: string
   schedule?: Schedule | null
@@ -188,29 +189,29 @@ export const authApi = {
 
 // Connections
 export const connectionsApi = {
-  list: (page = 1, limit = 50) =>
-    api.get<ListEnvelope<Connection>>('/api/v1/connections', { params: { page, limit } }),
+  list: () =>
+    api.get<Connection[]>('/api/v1/connections'),
   get: (id: string) => api.get<Connection>(`/api/v1/connections/${id}`),
   create: (data: unknown) => api.post<Connection>('/api/v1/connections', data),
   update: (id: string, data: unknown) => api.put<Connection>(`/api/v1/connections/${id}`, data),
   delete: (id: string) => api.delete(`/api/v1/connections/${id}`),
   test: (data: unknown) => api.post<TestConnectionResponse>('/api/v1/connections/test', data),
   testById: (id: string) => api.post<TestConnectionResponse>(`/api/v1/connections/${id}/test`),
-  types: () => api.get<ConnectionType[]>('/api/v1/connections/types'),
+  types: () => api.get<ConnectionType[]>('/api/v1/connections/types/list'),
 }
 
 // Pipelines
 export const pipelinesApi = {
-  list: (page = 1, limit = 50) =>
-    api.get<ListEnvelope<Pipeline>>('/api/v1/pipelines', { params: { page, limit } }),
+  list: () =>
+    api.get<Pipeline[]>('/api/v1/pipelines'),
   get: (id: string) => api.get<Pipeline>(`/api/v1/pipelines/${id}`),
   create: (data: unknown) => api.post<Pipeline>('/api/v1/pipelines', data),
   update: (id: string, data: unknown) => api.put<Pipeline>(`/api/v1/pipelines/${id}`, data),
   delete: (id: string) => api.delete(`/api/v1/pipelines/${id}`),
   trigger: (id: string, data?: { date_from?: string; date_to?: string }) =>
     api.post<{ job_id: string }>(`/api/v1/pipelines/${id}/trigger`, data ?? {}),
-  runs: (id: string, page = 1, limit = 20) =>
-    api.get<ListEnvelope<JobRun>>(`/api/v1/pipelines/${id}/runs`, { params: { page, limit } }),
+  runs: (id: string, limit = 10) =>
+    api.get<JobRun[]>(`/api/v1/pipelines/${id}/runs`, { params: { limit } }),
   setSchedule: (id: string, data: { cron_expr: string; is_active: boolean }) =>
     api.put<Schedule>(`/api/v1/pipelines/${id}/schedule`, data),
   deleteSchedule: (id: string) => api.delete(`/api/v1/pipelines/${id}/schedule`),
@@ -218,8 +219,8 @@ export const pipelinesApi = {
 
 // Runs
 export const runsApi = {
-  list: (params?: { page?: number; limit?: number; status?: string; pipeline_id?: string }) =>
-    api.get<ListEnvelope<JobRun>>('/api/v1/runs', { params }),
+  list: (params?: { limit?: number; offset?: number; status?: string; pipeline_id?: string }) =>
+    api.get<JobRun[]>('/api/v1/runs', { params }),
   get: (id: string) => api.get<JobRun>(`/api/v1/runs/${id}`),
   logs: (id: string, since?: number) =>
     api.get<LogResponse>(`/api/v1/runs/${id}/logs`, { params: since != null ? { since } : {} }),

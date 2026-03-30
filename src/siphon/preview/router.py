@@ -24,18 +24,24 @@ class PreviewRequest(BaseModel):
     query: str
 
 
-@router.post("")
+class PreviewResponse(BaseModel):
+    columns: list[str]
+    rows: list[list]
+    row_count: int
+
+
+@router.post("", response_model=PreviewResponse)
 async def preview_query(
     body: PreviewRequest,
     _: Principal = Depends(get_current_principal),  # noqa: B008
     db: AsyncSession = Depends(get_db),  # noqa: B008
-) -> list[dict]:
+) -> PreviewResponse:
     """Execute *query* against the connection, capped at 100 rows."""
+    import uuid
+
     from siphon.crypto import decrypt
     from siphon.orm import Connection
     from siphon.plugins.sources.sql import _validate_host  # reuse SSRF guard
-
-    import uuid
 
     try:
         conn_uuid = uuid.UUID(body.connection_id)
@@ -51,16 +57,17 @@ async def preview_query(
     config = json.loads(decrypt(conn.encrypted_config))
     connection_str = config.get("connection", "")
 
-    # SSRF guard — reuse the same validation as the SQL source
     _validate_host(connection_str)
 
-    # Cap the query at LIMIT 100 — strip existing LIMIT then append ours
     limited_query = _apply_limit(body.query.strip(), 100)
 
     try:
         import connectorx as cx
         table = cx.read_sql(connection_str, limited_query, return_type="arrow")
-        return table.to_pylist()
+        d = table.to_pydict()
+        columns = list(d.keys())
+        rows = [[d[col][i] for col in columns] for i in range(table.num_rows)]
+        return PreviewResponse(columns=columns, rows=rows, row_count=table.num_rows)
     except Exception as exc:
         raise HTTPException(400, f"Query failed: {exc}") from exc
 

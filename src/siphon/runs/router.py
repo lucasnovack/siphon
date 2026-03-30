@@ -18,7 +18,7 @@ router = APIRouter(prefix="/api/v1/runs", tags=["runs"])
 
 def _run_to_dict(r: JobRun) -> dict:
     return {
-        "id": r.id,
+        "id": r.job_id,
         "job_id": r.job_id,
         "pipeline_id": str(r.pipeline_id) if r.pipeline_id else None,
         "status": r.status,
@@ -48,9 +48,24 @@ async def list_runs(
     return [_run_to_dict(r) for r in result.scalars().all()]
 
 
+@router.get("/{run_id}", response_model=None)
+async def get_run(
+    run_id: str,
+    _: Principal = Depends(get_current_principal),  # noqa: B008
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+) -> dict:
+    """Return a single job_run by job_id."""
+    from sqlalchemy import select as sa_select
+    result = await db.execute(sa_select(JobRun).where(JobRun.job_id == run_id))
+    run = result.scalar_one_or_none()
+    if run is None:
+        raise HTTPException(404, "Run not found")
+    return _run_to_dict(run)
+
+
 @router.get("/{run_id}/logs")
 async def get_run_logs(
-    run_id: int,
+    run_id: str,
     since: int = Query(0, ge=0, description="Return only log lines at or after this offset"),
     _: Principal = Depends(get_current_principal),  # noqa: B008
     db: AsyncSession = Depends(get_db),  # noqa: B008
@@ -61,13 +76,15 @@ async def get_run_logs(
     (``SIPHON_JOB_TTL_SECONDS``).  Use the ``since`` parameter for polling:
     pass the ``next_offset`` from the previous response.
     """
-    run = await db.get(JobRun, run_id)
+    from sqlalchemy import select as sa_select
+    result = await db.execute(sa_select(JobRun).where(JobRun.job_id == run_id))
+    run = result.scalar_one_or_none()
     if run is None:
         raise HTTPException(404, "Run not found")
 
     from siphon.main import queue
 
-    job = queue.get_job(run.job_id)
+    job = queue.get_job(run_id)
     if job is None:
         # Job already evicted or never in memory (historical run)
         return {"run_id": run_id, "logs": [], "next_offset": since}
@@ -82,7 +99,7 @@ async def get_run_logs(
 
 @router.post("/{run_id}/cancel", status_code=202)
 async def cancel_run(
-    run_id: int,
+    run_id: str,
     principal: Principal = Depends(get_current_principal),  # noqa: B008
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ) -> dict:
@@ -95,7 +112,9 @@ async def cancel_run(
     """
     principal.require_admin()
 
-    run = await db.get(JobRun, run_id)
+    from sqlalchemy import select as sa_select
+    result = await db.execute(sa_select(JobRun).where(JobRun.job_id == run_id))
+    run = result.scalar_one_or_none()
     if run is None:
         raise HTTPException(404, "Run not found")
     if run.status not in ("queued", "running"):
@@ -103,7 +122,7 @@ async def cancel_run(
 
     from siphon.main import queue
 
-    job = queue.get_job(run.job_id)
+    job = queue.get_job(run_id)
     if job is None:
         raise HTTPException(409, "Job not found in queue (may have already completed)")
 

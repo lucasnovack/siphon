@@ -25,7 +25,7 @@ ConnType = Literal["sql", "sftp", "s3_parquet"]
 
 class ConnectionCreate(BaseModel):
     name: str
-    conn_type: ConnType
+    type: ConnType
     config: dict[str, Any]
 
 
@@ -34,10 +34,15 @@ class ConnectionUpdate(BaseModel):
     config: dict[str, Any] | None = None
 
 
+class ConnectionTestRequest(BaseModel):
+    type: ConnType
+    config: dict[str, Any]
+
+
 class ConnectionResponse(BaseModel):
     id: str
     name: str
-    conn_type: str
+    type: str
     key_version: int
     created_at: datetime
     updated_at: datetime
@@ -48,7 +53,7 @@ def _to_response(conn: Connection) -> ConnectionResponse:
     return ConnectionResponse(
         id=str(conn.id),
         name=conn.name,
-        conn_type=conn.conn_type,
+        type=conn.conn_type,
         key_version=conn.key_version,
         created_at=conn.created_at,
         updated_at=conn.updated_at,
@@ -86,7 +91,7 @@ async def create_connection(
     now = datetime.now(tz=UTC)
     conn = Connection(
         name=body.name,
-        conn_type=body.conn_type,
+        conn_type=body.type,
         encrypted_config=encrypt(json.dumps(body.config)),
         key_version=1,
         created_at=now,
@@ -102,6 +107,21 @@ async def get_connection_types(
     _: Principal = Depends(get_current_principal),  # noqa: B008
 ) -> list[dict]:
     return _CONNECTION_TYPES
+
+
+@router.post("/test")
+async def test_connection_unsaved(
+    body: ConnectionTestRequest,
+    _: Principal = Depends(get_current_principal),  # noqa: B008
+) -> dict:
+    import time
+    loop = asyncio.get_event_loop()
+    t0 = time.monotonic()
+    try:
+        await loop.run_in_executor(None, _test_connection, body.type, body.config)
+    except Exception as exc:
+        raise HTTPException(400, f"Connection test failed: {exc}") from exc
+    return {"ok": True, "latency_ms": round((time.monotonic() - t0) * 1000)}
 
 
 @router.get("/{conn_id}", response_model=ConnectionResponse)

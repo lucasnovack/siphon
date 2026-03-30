@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { GitBranch, Play, Plus, Trash2 } from 'lucide-react'
@@ -15,11 +14,9 @@ import { toast } from '@/hooks/use-toast'
 export function PipelinesPage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
-  const [page] = useState(1)
-
   const { data, isLoading } = useQuery({
-    queryKey: queryKeys.pipelines.list(page, 50),
-    queryFn: () => pipelinesApi.list(page, 50).then((r) => r.data),
+    queryKey: queryKeys.pipelines.all,
+    queryFn: () => pipelinesApi.list().then((r) => r.data),
   })
 
   const deleteMutation = useMutation({
@@ -40,7 +37,7 @@ export function PipelinesPage() {
     onError: () => toast({ title: 'Failed to trigger pipeline', variant: 'destructive' }),
   })
 
-  const pipelines = data?.items ?? []
+  const pipelines = data ?? []
 
   return (
     <div>
