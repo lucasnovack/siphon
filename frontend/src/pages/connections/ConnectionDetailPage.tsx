@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { CheckCircle, Loader2, XCircle } from 'lucide-react'
+import { CheckCircle, Edit, Loader2, XCircle } from 'lucide-react'
 import { connectionsApi } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
 import { PageHeader } from '@/components/shared/PageHeader'
@@ -60,6 +60,10 @@ export function ConnectionDetailPage() {
           <div className="flex gap-2">
             <Button variant="outline" onClick={handleTest} disabled={testing}>
               {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Test'}
+            </Button>
+            <Button variant="outline" onClick={() => navigate(`/connections/${id}/edit`)}>
+              <Edit className="h-4 w-4 mr-2" />
+              Edit
             </Button>
             <ConfirmDialog
               trigger={<Button variant="destructive">Delete</Button>}

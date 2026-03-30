@@ -86,7 +86,7 @@ export interface Connection {
   id: string
   name: string
   type: 'sql' | 'sftp' | 's3_parquet'
-  created_by: string
+  key_version: number
   created_at: string
   updated_at: string
 }
@@ -94,7 +94,10 @@ export interface Connection {
 export interface ConnectionTypeField {
   name: string
   type: string
-  required: boolean
+  label?: string
+  required?: boolean
+  secret?: boolean
+  placeholder?: string
 }
 
 export interface ConnectionType {
@@ -105,19 +108,17 @@ export interface ConnectionType {
 export interface Pipeline {
   id: string
   name: string
-  source_conn: string
-  source_query: string
-  dest_conn: string
-  dest_prefix: string
+  source_connection_id: string
+  dest_connection_id: string | null
+  query: string
+  destination_path: string
   extraction_mode: 'full_refresh' | 'incremental'
   incremental_key: string | null
   last_watermark: string | null
   last_schema_hash: string | null
-  options: Record<string, unknown> | null
   min_rows_expected: number | null
   max_rows_drop_pct: number | null
   is_active: boolean
-  created_by: string
   created_at: string
   updated_at: string
   schedule?: Schedule | null
@@ -196,7 +197,7 @@ export const connectionsApi = {
   delete: (id: string) => api.delete(`/api/v1/connections/${id}`),
   test: (data: unknown) => api.post<TestConnectionResponse>('/api/v1/connections/test', data),
   testById: (id: string) => api.post<TestConnectionResponse>(`/api/v1/connections/${id}/test`),
-  types: () => api.get<ConnectionType[]>('/api/v1/connections/types'),
+  types: () => api.get<ConnectionType[]>('/api/v1/connections/types/list'),
 }
 
 // Pipelines

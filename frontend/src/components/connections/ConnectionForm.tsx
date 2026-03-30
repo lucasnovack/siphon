@@ -19,13 +19,14 @@ const baseSchema = z.object({
 
 interface ConnectionFormProps {
   initialValues?: Record<string, unknown>
+  editing?: boolean
   onSubmit: (data: Record<string, unknown>) => Promise<void>
   submitLabel?: string
   isLoading?: boolean
   error?: unknown
 }
 
-export function ConnectionForm({ initialValues, onSubmit, submitLabel = 'Save', isLoading, error }: ConnectionFormProps) {
+export function ConnectionForm({ initialValues, editing = false, onSubmit, submitLabel = 'Save', isLoading, error }: ConnectionFormProps) {
   const [selectedType, setSelectedType] = useState<string>(String(initialValues?.type ?? ''))
   const [dynamicFields, setDynamicFields] = useState<Record<string, string>>({})
   const [testResult, setTestResult] = useState<{ ok: boolean; latency_ms?: number; error?: string } | null>(null)
@@ -65,7 +66,7 @@ export function ConnectionForm({ initialValues, onSubmit, submitLabel = 'Save', 
     setTesting(true)
     setTestResult(null)
     try {
-      const res = await connectionsApi.test({ type: selectedType, ...dynamicFields })
+      const res = await connectionsApi.test({ type: selectedType, config: dynamicFields })
       setTestResult(res.data)
     } catch {
       setTestResult({ ok: false, error: 'Test failed' })
@@ -88,36 +89,47 @@ export function ConnectionForm({ initialValues, onSubmit, submitLabel = 'Save', 
 
       <div className="space-y-2">
         <Label>Type</Label>
-        <Select value={selectedType} onValueChange={handleTypeChange}>
-          <SelectTrigger className={errors.type ? 'border-destructive' : ''}>
-            <SelectValue placeholder="Select type" />
-          </SelectTrigger>
-          <SelectContent>
-            {(types ?? []).map((t: ConnectionType) => (
-              <SelectItem key={t.type} value={t.type}>
-                {t.type}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {editing ? (
+          <div className="flex h-10 w-full items-center rounded-md border border-input bg-muted px-3 text-sm text-muted-foreground">
+            {selectedType}
+          </div>
+        ) : (
+          <Select value={selectedType} onValueChange={handleTypeChange}>
+            <SelectTrigger className={errors.type ? 'border-destructive' : ''}>
+              <SelectValue placeholder="Select type" />
+            </SelectTrigger>
+            <SelectContent>
+              {(types ?? []).map((t: ConnectionType) => (
+                <SelectItem key={t.type} value={t.type}>
+                  {t.type}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
         {errors.type && <p className="text-xs text-destructive">{errors.type.message}</p>}
       </div>
 
-      {currentTypeDef?.fields.map((field) => (
-        <div key={field.name} className="space-y-2">
-          <Label>
-            {field.name}
-            {field.required && <span className="text-destructive ml-1">*</span>}
-          </Label>
-          <Input
-            type={field.name.toLowerCase().includes('password') || field.name.toLowerCase().includes('secret') ? 'password' : 'text'}
-            placeholder={field.name}
-            value={dynamicFields[field.name] ?? ''}
-            onChange={(e) => handleDynamicChange(field.name, e.target.value)}
-            required={field.required}
-          />
-        </div>
-      ))}
+      {currentTypeDef?.fields.map((field) => {
+        const isSecret = field.name.toLowerCase().includes('password') || field.name.toLowerCase().includes('secret')
+        const placeholder = editing
+          ? (isSecret ? '••••••••  (leave blank to keep current)' : '(leave blank to keep current)')
+          : (field.placeholder ?? field.name)
+        return (
+          <div key={field.name} className="space-y-2">
+            <Label>
+              {field.label ?? field.name}
+              {field.required && !editing && <span className="text-destructive ml-1">*</span>}
+            </Label>
+            <Input
+              type={isSecret ? 'password' : 'text'}
+              placeholder={placeholder}
+              value={dynamicFields[field.name] ?? ''}
+              onChange={(e) => handleDynamicChange(field.name, e.target.value)}
+            />
+          </div>
+        )
+      })}
 
       {selectedType && currentTypeDef && (
         <div className="flex items-center gap-3">

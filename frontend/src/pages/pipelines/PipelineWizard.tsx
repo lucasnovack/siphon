@@ -71,8 +71,9 @@ export function PipelineWizard() {
     try {
       const res = await previewApi.run(step1.source_conn, step2.source_query)
       setPreview(res.data)
-    } catch {
-      toast({ title: 'Preview failed', variant: 'destructive' })
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? 'Preview failed'
+      toast({ title: 'Preview failed', description: msg, variant: 'destructive' })
     } finally {
       setPreviewing(false)
     }
@@ -81,12 +82,12 @@ export function PipelineWizard() {
   function handleCreate(s4: Step4) {
     createMutation.mutate({
       name: s4.name,
-      source_conn: step1.source_conn,
-      source_query: step2.source_query,
+      source_connection_id: step1.source_conn,
+      query: step2.source_query,
       extraction_mode: step2.extraction_mode,
       incremental_key: step2.incremental_key ?? null,
-      dest_conn: step3.dest_conn,
-      dest_prefix: step3.dest_prefix,
+      dest_connection_id: step3.dest_conn,
+      destination_path: step3.dest_prefix,
       min_rows_expected: step3.min_rows_expected ?? null,
       max_rows_drop_pct: step3.max_rows_drop_pct ?? null,
       schedule: s4.cron_expr ? { cron_expr: s4.cron_expr, is_active: true } : null,
