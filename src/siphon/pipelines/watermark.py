@@ -12,6 +12,15 @@ import re
 _VALID_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
 
 
+def _validate_key(key: str) -> None:
+    """Validate that key is a valid SQL identifier."""
+    if not _VALID_IDENTIFIER.match(key):
+        raise ValueError(
+            f"Invalid incremental_key {key!r}: must be a plain SQL identifier "
+            "(letters, digits, underscores, dots only — no spaces or special characters)."
+        )
+
+
 def inject_watermark(query: str, key: str, watermark: str, dialect: str) -> str:
     """Return a new SQL string that filters rows newer than *watermark*.
 
@@ -24,11 +33,7 @@ def inject_watermark(query: str, key: str, watermark: str, dialect: str) -> str:
     Returns:
         SQL string: ``WITH _siphon_base AS (<query>) SELECT * … WHERE key > cast``.
     """
-    if not _VALID_IDENTIFIER.match(key):
-        raise ValueError(
-            f"Invalid incremental_key {key!r}: must be a plain SQL identifier "
-            "(letters, digits, underscores, dots only — no spaces or special characters)."
-        )
+    _validate_key(key)
     cast_expr = _cast_for_dialect(watermark, dialect)
     return (
         f"WITH _siphon_base AS (\n"
@@ -57,11 +62,7 @@ def inject_backfill_window(
     Returns:
         SQL string: ``WITH _siphon_base AS (<query>) SELECT * … WHERE key >= from AND key < to``.
     """
-    if not _VALID_IDENTIFIER.match(key):
-        raise ValueError(
-            f"Invalid incremental_key {key!r}: must be a plain SQL identifier "
-            "(letters, digits, underscores, dots only — no spaces or special characters)."
-        )
+    _validate_key(key)
     cast_from = _cast_for_dialect(from_dt, dialect)
     cast_to = _cast_for_dialect(to_dt, dialect)
     return (
