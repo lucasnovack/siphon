@@ -291,3 +291,87 @@ def test_promote_noop_without_job_id():
     with patch.object(dest, "_make_fs") as mock_make_fs:
         dest.promote()
     mock_make_fs.assert_not_called()
+
+
+# ── Partitioning ──────────────────────────────────────────────────────────────
+
+import datetime
+
+
+def test_partitioned_write_adds_date_column():
+    """With partition_by='ingest_date', _date column is added and partition_cols passed."""
+    from siphon.plugins.destinations.s3_parquet import S3ParquetDestination
+
+    dest = S3ParquetDestination(
+        path="bronze/orders/",
+        endpoint="minio:9000",
+        access_key="k",
+        secret_key="s",
+        job_id="",
+        partition_by="ingest_date",
+    )
+    table = pa.table({"x": [1, 2]})
+
+    with patch("siphon.plugins.destinations.s3_parquet.pafs") as mock_pafs, \
+         patch("siphon.plugins.destinations.s3_parquet.pq") as mock_pq, \
+         patch("siphon.plugins.destinations.s3_parquet.datetime") as mock_dt:
+        mock_dt.date.today.return_value = datetime.date(2024, 4, 3)
+        mock_pafs.S3FileSystem.return_value = MagicMock()
+        dest.write(table)
+
+    call_kwargs = mock_pq.write_to_dataset.call_args
+    assert call_kwargs.kwargs.get("partition_cols") == ["_date"]
+    written_table = call_kwargs.args[0]
+    assert "_date" in written_table.schema.names
+    assert written_table.column("_date").to_pylist() == ["2024-04-03", "2024-04-03"]
+
+
+def test_no_partition_cols_without_ingest_date():
+    """Default partition_by='none' must NOT pass partition_cols to write_to_dataset."""
+    from siphon.plugins.destinations.s3_parquet import S3ParquetDestination
+
+    dest = S3ParquetDestination(
+        path="bronze/orders/",
+        endpoint="minio:9000",
+        access_key="k",
+        secret_key="s",
+    )
+    table = pa.table({"x": [1]})
+
+    with patch("siphon.plugins.destinations.s3_parquet.pafs") as mock_pafs, \
+         patch("siphon.plugins.destinations.s3_parquet.pq") as mock_pq:
+        mock_pafs.S3FileSystem.return_value = MagicMock()
+        dest.write(table)
+
+    call_kwargs = mock_pq.write_to_dataset.call_args
+    assert "partition_cols" not in call_kwargs.kwargs
+
+
+def test_promote_preserves_subdirectory_structure():
+    """promote() with recursive=True must preserve relative paths under staging."""
+    from siphon.plugins.destinations.s3_parquet import S3ParquetDestination
+
+    dest = S3ParquetDestination(
+        path="bronze/orders/",
+        endpoint="minio:9000",
+        access_key="k",
+        secret_key="s",
+        job_id="job-part",
+    )
+
+    file1 = MagicMock()
+    file1.type = pafs.FileType.File
+    file1.path = "bronze/orders/_staging/job-part/_date=2024-04-03/part-0.parquet"
+    file1.base_name = "part-0.parquet"
+
+    mock_fs = MagicMock()
+    mock_fs.get_file_info.return_value = [file1]
+
+    with patch.object(dest, "_make_fs", return_value=mock_fs):
+        dest.promote()
+
+    mock_fs.copy_file.assert_called_once_with(
+        "bronze/orders/_staging/job-part/_date=2024-04-03/part-0.parquet",
+        "bronze/orders/_date=2024-04-03/part-0.parquet",
+    )
+    mock_fs.delete_dir.assert_called_once_with("bronze/orders/_staging/job-part")
