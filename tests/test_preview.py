@@ -85,9 +85,11 @@ def test_preview_runs_query_and_returns_rows(client):
                     "query": "SELECT * FROM orders",
                 })
     assert resp.status_code == 200
-    rows = resp.json()
-    assert isinstance(rows, list)
-    assert len(rows) == 2
+    body = resp.json()
+    assert isinstance(body["rows"], list)
+    assert len(body["rows"]) == 2
+    assert body["row_count"] == 2
+    assert "id" in body["columns"]
 
 
 class TestApplyLimit:

@@ -7,11 +7,12 @@ Available to both admin and operator roles.
 import json
 import re
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from siphon.auth.deps import Principal, get_current_principal
+from siphon.auth.router import limiter
 from siphon.db import get_db
 
 router = APIRouter(prefix="/api/v1/preview", tags=["preview"])
@@ -31,7 +32,9 @@ class PreviewResponse(BaseModel):
 
 
 @router.post("", response_model=PreviewResponse)
+@limiter.limit("30/minute")
 async def preview_query(
+    request: Request,
     body: PreviewRequest,
     _: Principal = Depends(get_current_principal),  # noqa: B008
     db: AsyncSession = Depends(get_db),  # noqa: B008

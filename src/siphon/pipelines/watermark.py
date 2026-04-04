@@ -4,6 +4,12 @@
 Wraps the original query in a CTE so the WHERE clause works regardless
 of whether the query already has its own WHERE, GROUP BY, ORDER BY, etc.
 """
+import re
+
+# Only plain SQL identifiers are allowed as watermark keys (letters, digits, underscores).
+# Dots are permitted for schema-qualified names (e.g. "schema.column").
+# This prevents SQL injection via the incremental_key field.
+_VALID_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
 
 
 def inject_watermark(query: str, key: str, watermark: str, dialect: str) -> str:
@@ -18,6 +24,11 @@ def inject_watermark(query: str, key: str, watermark: str, dialect: str) -> str:
     Returns:
         SQL string: ``WITH _siphon_base AS (<query>) SELECT * … WHERE key > cast``.
     """
+    if not _VALID_IDENTIFIER.match(key):
+        raise ValueError(
+            f"Invalid incremental_key {key!r}: must be a plain SQL identifier "
+            "(letters, digits, underscores, dots only — no spaces or special characters)."
+        )
     cast_expr = _cast_for_dialect(watermark, dialect)
     return (
         f"WITH _siphon_base AS (\n"

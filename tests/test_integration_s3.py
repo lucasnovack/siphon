@@ -18,7 +18,7 @@ import pytest
 pytestmark = pytest.mark.integration
 
 MYSQL_CONN = "mysql://siphon:siphon@localhost:3306/testdb"
-MINIO_ENDPOINT = "localhost:9000"
+MINIO_ENDPOINT = "localhost:9010"
 MINIO_ACCESS_KEY = "minioadmin"
 MINIO_SECRET_KEY = "minioadmin"
 MINIO_BUCKET = "bronze"

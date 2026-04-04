@@ -19,10 +19,10 @@ MySQL connection string for Siphon:
   mysql://siphon:siphon@host.docker.internal:3306/testdb
 
 MinIO connection for Siphon:
-  Endpoint:   host.docker.internal:9000
+  Endpoint:   host.docker.internal:9010
   Access key: minioadmin
   Secret key: minioadmin
-  Console UI: http://localhost:9001
+  Console UI: http://localhost:9011
 EOF
 }
 
@@ -50,8 +50,8 @@ case "${1:-}" in
     wait_healthy minio
     echo ""
     echo "MySQL:  mysql://siphon:siphon@host.docker.internal:3306/testdb"
-    echo "MinIO:  endpoint=host.docker.internal:9000  key=minioadmin  secret=minioadmin"
-    echo "MinIO console: http://localhost:9001"
+    echo "MinIO:  endpoint=host.docker.internal:9010  key=minioadmin  secret=minioadmin"
+    echo "MinIO console: http://localhost:9011"
     ;;
   stop)
     echo "Stopping test services (data volumes preserved)..."

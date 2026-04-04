@@ -121,18 +121,28 @@ def _remove_job(job_id: str) -> None:
 
 
 def _parse_cron(cron: str) -> dict:
-    """Parse a 5-field cron string into APScheduler CronTrigger kwargs."""
+    """Parse a 5-field cron string into APScheduler CronTrigger kwargs.
+
+    Validates the expression by constructing a CronTrigger, which raises
+    ValueError on invalid field values (e.g. '99 99 99 99 99').
+    """
     parts = cron.strip().split()
     if len(parts) != 5:
         raise ValueError(f"Invalid cron expression (expected 5 fields): {cron!r}")
     minute, hour, day, month, day_of_week = parts
-    return {
+    trigger_kwargs = {
         "minute": minute,
         "hour": hour,
         "day": day,
         "month": month,
         "day_of_week": day_of_week,
     }
+    try:
+        from apscheduler.triggers.cron import CronTrigger
+        CronTrigger(**trigger_kwargs)
+    except Exception as exc:
+        raise ValueError(f"Invalid cron expression {cron!r}: {exc}") from exc
+    return trigger_kwargs
 
 
 def _fire_pipeline(pipeline_id_str: str) -> None:
@@ -260,6 +270,7 @@ async def _async_trigger_pipeline(pipeline_id_str: str) -> None:
             "endpoint": dest_config["endpoint"],
             "access_key": dest_config["access_key"],
             "secret_key": dest_config["secret_key"],
+            "extraction_mode": p.extraction_mode,
         }
 
         try:

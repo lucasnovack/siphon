@@ -1,6 +1,7 @@
 # src/siphon/main.py
 import logging
 import os
+import re
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -112,6 +113,16 @@ app.include_router(runs_router)
 
 # ── Middleware ────────────────────────────────────────────────────────────────
 @app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    """Add standard security headers to all responses."""
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
+
+@app.middleware("http")
 async def request_size_limit(request: Request, call_next):
     """Reject requests whose Content-Length exceeds SIPHON_MAX_REQUEST_SIZE_MB."""
     max_bytes = int(os.getenv("SIPHON_MAX_REQUEST_SIZE_MB", "1")) * 1024 * 1024
@@ -125,13 +136,19 @@ async def request_size_limit(request: Request, call_next):
 
 
 # ── Exception handlers ────────────────────────────────────────────────────────
+_SECRET_FIELD_RE = re.compile(
+    r'("(?:password|secret|secret_key|access_key|connection|token)"\s*:\s*)"[^"]*"',
+    re.IGNORECASE,
+)
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    import logging
     body = await request.body()
-    logging.getLogger("siphon.validation").error(
+    redacted = _SECRET_FIELD_RE.sub(r'\1"***"', body.decode(errors="replace"))
+    logger.error(
         "422 on %s %s — body=%s — errors=%s",
-        request.method, request.url.path, body.decode(errors="replace"), exc.errors()
+        request.method, request.url.path, redacted, exc.errors()
     )
     safe_errors = [{k: v for k, v in err.items() if k != "input"} for err in exc.errors()]
     return JSONResponse(
@@ -247,7 +264,10 @@ async def health_ready() -> JSONResponse:
 
 
 @app.get("/health")
-async def health_debug() -> dict:
+async def health_debug(
+    principal: Principal = Depends(get_current_principal),  # noqa: B008
+) -> dict:
+    principal.require_admin()
     uptime = int((datetime.now(tz=UTC) - _START_TIME).total_seconds())
     accepting = not (queue.is_full or queue.is_draining)
     return {
@@ -259,8 +279,11 @@ async def health_debug() -> dict:
 
 
 @app.get("/metrics")
-async def metrics_endpoint() -> Response:
+async def metrics_endpoint(
+    principal: Principal = Depends(get_current_principal),  # noqa: B008
+) -> Response:
     """Expose Prometheus metrics in text format."""
+    principal.require_admin()
     from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
     from siphon.metrics import queue_depth
