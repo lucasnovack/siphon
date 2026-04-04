@@ -35,6 +35,9 @@ class TestCastForDialect:
         assert "''" in expr
         assert "bad" in expr
 
+    def test_sqlserver_alias(self):
+        assert "DATETIMEOFFSET" in _cast_for_dialect("2024-01-01", "sqlserver")
+
 
 class TestInjectWatermark:
     BASE = "SELECT id, updated_at FROM orders"
@@ -70,6 +73,10 @@ class TestInjectWatermark:
         assert any("SELECT * FROM _siphon_base" in l for l in lines)
         assert any("WHERE updated_at >" in l for l in lines)
 
+    def test_invalid_key_raises(self):
+        with pytest.raises(ValueError, match="incremental_key"):
+            inject_watermark(self.BASE, "bad key!", self.WM, "postgresql")
+
 
 class TestInjectBackfillWindow:
     BASE = "SELECT id, updated_at FROM orders"
@@ -86,6 +93,8 @@ class TestInjectBackfillWindow:
         result = inject_backfill_window(self.BASE, "updated_at", self.FROM, self.TO, "postgresql")
         assert "WHERE updated_at >=" in result
         assert "AND updated_at <" in result
+        assert self.FROM in result
+        assert self.TO in result
 
     def test_uses_dialect_cast(self):
         result = inject_backfill_window(self.BASE, "updated_at", self.FROM, self.TO, "mysql")
