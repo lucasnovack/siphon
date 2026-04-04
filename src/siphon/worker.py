@@ -54,6 +54,34 @@ def _check_data_quality(dq: dict, rows_read: int) -> str | None:
     return None
 
 
+# ── PII masking ───────────────────────────────────────────────────────────────
+
+
+def _apply_pii_masking(table, pii_columns: dict[str, str]):
+    """Apply sha256 hashing or redaction to specified columns.
+
+    Columns not present in the table are silently skipped.
+    Schema hash should be captured BEFORE calling this function.
+    """
+    import pyarrow as pa
+
+    for col_name, method in pii_columns.items():
+        if col_name not in table.schema.names:
+            continue
+        if method == "sha256":
+            hashed = pa.array(
+                [hashlib.sha256(str(v).encode()).hexdigest() if v is not None else None
+                 for v in table.column(col_name).to_pylist()]
+            )
+            idx = table.schema.get_field_index(col_name)
+            table = table.set_column(idx, col_name, hashed)
+        elif method == "redact":
+            null_col = pa.array([None] * table.num_rows, type=pa.null())
+            idx = table.schema.get_field_index(col_name)
+            table = table.set_column(idx, col_name, null_col)
+    return table
+
+
 # ── Core extraction ───────────────────────────────────────────────────────────
 
 
@@ -92,6 +120,8 @@ def _sync_extract_and_write(
 
         rows_written = 0
         for i, batch in enumerate(batches):
+            if job.pipeline_pii:
+                batch = _apply_pii_masking(batch, job.pipeline_pii)
             rows_written += destination.write(batch, is_first_chunk=(i == 0))
         return rows_read, rows_written
 
@@ -102,6 +132,8 @@ def _sync_extract_and_write(
         if i == 0:
             job.schema_hash = _compute_schema_hash(batch.schema)
         rows_read += batch.num_rows
+        if job.pipeline_pii:
+            batch = _apply_pii_masking(batch, job.pipeline_pii)
         rows_written += destination.write(batch, is_first_chunk=(i == 0))
     return rows_read, rows_written
 
