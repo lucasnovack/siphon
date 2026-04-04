@@ -30,7 +30,7 @@ The API is at `http://localhost:8000`. Log in with `admin@example.com` / `change
 The `testenv/` directory provides a local MySQL database and MinIO instance for end-to-end testing:
 
 ```bash
-./testenv/mysql.sh start     # starts MySQL 8.0 on :3306 and MinIO on :9000/:9001
+./testenv/mysql.sh start     # starts MySQL 8.0 on :3306 and MinIO on :9010/:9011
 ./testenv/mysql.sh stop      # stop containers
 ./testenv/mysql.sh destroy   # stop + delete volumes
 ./testenv/mysql.sh shell     # open MySQL shell
@@ -41,7 +41,7 @@ The `testenv/` directory provides a local MySQL database and MinIO instance for 
 
 ```
 MySQL:  mysql://siphon:siphon@host.docker.internal:3306/testdb
-MinIO:  endpoint=host.docker.internal:9000, key=minioadmin, secret=minioadmin
+MinIO:  endpoint=host.docker.internal:9010, key=minioadmin, secret=minioadmin
 ```
 
 The schema and seed data are in `testenv/init/`:

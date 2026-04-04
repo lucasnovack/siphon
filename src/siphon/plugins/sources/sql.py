@@ -103,7 +103,10 @@ class SQLSource(Source):
                 "Parallel Oracle partitioning is planned for a future phase."
             )
 
-        conn = oracledb.connect(dsn=self._oracle_dsn(), tcp_connect_timeout=_CONNECT_TIMEOUT)
+        try:
+            conn = oracledb.connect(dsn=self._oracle_dsn(), tcp_connect_timeout=_CONNECT_TIMEOUT)
+        except Exception as exc:
+            raise RuntimeError(f"Oracle connection failed: {type(exc).__name__}") from None
         conn.outputtypehandler = _oracle_output_type_handler
         with conn, conn.cursor() as cursor:
             cursor.arraysize = chunk_size
@@ -142,6 +145,8 @@ def _validate_host(conn: str) -> None:
         return
 
     host = urlparse(conn).hostname
+    if host is None:
+        raise ValueError("Cannot parse hostname from connection string. Connection rejected.")
     allowed = [h.strip() for h in _ALLOWED_HOSTS.split(",")]
 
     for entry in allowed:

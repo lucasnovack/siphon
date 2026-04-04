@@ -263,7 +263,15 @@ def test_health_ready_returns_503_when_draining(client):
 
 
 def test_health_debug_returns_full_info(client):
-    response = client.get("/health")
+    from unittest.mock import MagicMock
+    admin_user = MagicMock()
+    admin_user.role = "admin"
+    admin_principal = Principal(type="user", user=admin_user)
+    app.dependency_overrides[get_current_principal] = lambda: admin_principal
+    try:
+        response = client.get("/health")
+    finally:
+        app.dependency_overrides[get_current_principal] = _override_principal
     assert response.status_code == 200
     body = response.json()
     assert "status" in body

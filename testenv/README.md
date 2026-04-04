@@ -5,7 +5,7 @@ Serviços isolados para testar o Siphon end-to-end sem depender de infraestrutur
 | Serviço | Função | Porta |
 |---------|--------|-------|
 | MySQL 8.0 | Fonte de dados (source) | 3306 |
-| MinIO | Destino S3-compatível (destination) | 9000 / 9001 |
+| MinIO | Destino S3-compatível (destination) | 9010 / 9011 |
 
 ---
 
@@ -165,16 +165,16 @@ MinIO é um object storage S3-compatível. Usado como destino dos pipelines no l
 
 | Campo      | Valor            |
 |------------|------------------|
-| Endpoint   | `localhost:9000` |
+| Endpoint   | `localhost:9010` |
 | Access Key | `minioadmin`     |
 | Secret Key | `minioadmin`     |
-| Console UI | http://localhost:9001 |
+| Console UI | http://localhost:9011 |
 
 ### Connection no Siphon
 
 > O Siphon roda dentro do Docker, então use `host.docker.internal` em vez de `localhost`.
 
-- **Endpoint**: `host.docker.internal:9000`
+- **Endpoint**: `host.docker.internal:9010`
 - **Access Key**: `minioadmin`
 - **Secret Key**: `minioadmin`
 
@@ -185,7 +185,7 @@ O `docker-compose.yml` principal já define `SIPHON_S3_SCHEME=http`, então não
 O MinIO começa vazio. É necessário criar pelo menos um bucket antes de configurar um pipeline com destino S3.
 
 **Via console web** (recomendado):
-1. Acesse http://localhost:9001
+1. Acesse http://localhost:9011
 2. Login: `minioadmin` / `minioadmin`
 3. Clique em **Buckets → Create Bucket**
 4. Nome sugerido: `bronze`

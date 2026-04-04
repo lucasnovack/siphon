@@ -100,7 +100,7 @@ Login with the bootstrap admin credentials set in `docker-compose.yml`:
 - **Source:** type `sql`, connection string e.g. `mysql://siphon:siphon@mysql:3306/testdb`
 - **Destination:** type `s3_parquet`, bucket `bronze`, endpoint `http://minio:9000`, access key `minioadmin`, secret `minioadmin`
 
-MinIO browser: [http://localhost:9001](http://localhost:9001) (minioadmin / minioadmin)
+MinIO browser: [http://localhost:9011](http://localhost:9011) (minioadmin / minioadmin)
 
 **5. Create a pipeline** (Pipelines → New Pipeline):
 - Select source connection → write a query → preview 100 rows
