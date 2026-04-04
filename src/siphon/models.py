@@ -71,6 +71,7 @@ class S3ParquetDestinationConfig(BaseModel):
     access_key: str
     secret_key: str
     compression: str = "snappy"
+    extraction_mode: Literal["full_refresh", "incremental"] = "full_refresh"
 
     def __repr__(self) -> str:
         return (
