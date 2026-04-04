@@ -351,7 +351,16 @@ async def trigger_pipeline(
     dest_config = json.loads(decrypt(dest_conn.encrypted_config))
 
     query = p.query
-    if p.extraction_mode == "incremental" and p.incremental_key and p.last_watermark:
+    if body.date_from and body.date_to:
+        # Backfill: inject two-sided window; watermark injection skipped
+        if not p.incremental_key:
+            raise HTTPException(400, "Backfill requires incremental_key to be set on the pipeline")
+        from siphon.pipelines.watermark import inject_backfill_window
+        dialect = src_config.get("connection", "").split("://")[0]
+        query = inject_backfill_window(
+            query, p.incremental_key, body.date_from, body.date_to, dialect
+        )
+    elif p.extraction_mode == "incremental" and p.incremental_key and p.last_watermark:
         from siphon.pipelines.watermark import inject_watermark
         dialect = src_config.get("connection", "").split("://")[0]
         query = inject_watermark(query, p.incremental_key, p.last_watermark, dialect)
@@ -390,6 +399,7 @@ async def trigger_pipeline(
             "max_rows_drop_pct": p.max_rows_drop_pct,
             "prev_rows": None,
         } if has_dq else None,
+        is_backfill=bool(body.date_from and body.date_to),
     )
 
     try:
@@ -407,7 +417,7 @@ async def trigger_pipeline(
         job_id=job.job_id,
         pipeline_id=pipeline_id,
         status="queued",
-        triggered_by="manual",
+        triggered_by="backfill" if job.is_backfill else "manual",
         created_at=now,
     )
     db.add(run)

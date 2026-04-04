@@ -214,6 +214,8 @@ async def _update_pipeline_metadata(job: Job, db_factory) -> None:
         return
     if job.status not in ("success", "partial_success"):
         return
+    if job.is_backfill:
+        return  # backfill runs must not move the global watermark
     try:
         import uuid
 
