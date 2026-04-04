@@ -65,6 +65,10 @@ class Pipeline(Base):
     pii_columns: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     min_rows_expected: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_rows_drop_pct: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    webhook_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    alert_on: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    sla_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sla_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     dest_connection_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("connections.id"), nullable=True
     )
