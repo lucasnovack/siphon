@@ -393,7 +393,8 @@ async def test_backfill_job_does_not_update_watermark(executor):
     """When job.is_backfill=True, _update_pipeline_metadata must not update last_watermark."""
     from unittest.mock import AsyncMock, patch
 
-    job = Job(job_id="backfill-1", pipeline_id="some-uuid", is_backfill=True)
+    import uuid as _uuid
+    job = Job(job_id="backfill-1", pipeline_id=str(_uuid.uuid4()), is_backfill=True)
     source = _OkSource()
     dest = _OkDest()
 
@@ -416,3 +417,20 @@ async def test_normal_job_calls_update_pipeline_metadata(executor):
         with patch("siphon.worker._persist_job_run", new_callable=AsyncMock):
             await run_job(_OkSource(), _OkDest(), job, executor, timeout=5, db_factory=AsyncMock())
     mock_update.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_update_pipeline_metadata_skips_on_backfill():
+    """_update_pipeline_metadata must return without touching DB when is_backfill=True."""
+    import uuid as _uuid
+    from unittest.mock import AsyncMock, MagicMock
+    from siphon.worker import _update_pipeline_metadata
+
+    job = Job(job_id="x", pipeline_id=str(_uuid.uuid4()), status="success", is_backfill=True)
+    mock_session = AsyncMock()
+    mock_factory = MagicMock()
+    mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+    await _update_pipeline_metadata(job, mock_factory)
+    # DB session must never be entered for a backfill job
+    mock_factory.return_value.__aenter__.assert_not_awaited()
