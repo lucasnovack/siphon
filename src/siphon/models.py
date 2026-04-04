@@ -47,6 +47,7 @@ class SFTPSourceConfig(BaseModel):
     password: str
     paths: list[str]
     parser: str
+    parser_config: dict = Field(default_factory=dict)
     skip_patterns: list[str] = Field(default_factory=lambda: ["TMP_*"])
     max_files: int = 1000
     chunk_size: int = 100
