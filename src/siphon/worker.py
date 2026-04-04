@@ -193,8 +193,10 @@ async def _update_pipeline_metadata(job: Job, db_factory) -> None:
             pipeline = result.scalar_one_or_none()
             if pipeline is None:
                 return
-            if pipeline.extraction_mode == "incremental":
-                pipeline.last_watermark = datetime.now(tz=UTC).isoformat()
+            # Always update the watermark on success so that switching from
+            # full → incremental starts from the last successful run, not from
+            # a stale watermark left by a previous incremental run.
+            pipeline.last_watermark = datetime.now(tz=UTC).isoformat()
             if job.schema_hash:
                 pipeline.last_schema_hash = job.schema_hash
             pipeline.updated_at = datetime.now(tz=UTC)
