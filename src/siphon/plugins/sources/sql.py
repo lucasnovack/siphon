@@ -12,6 +12,7 @@ from siphon import variables
 from siphon.models import mask_uri
 from siphon.plugins.sources import register
 from siphon.plugins.sources.base import Source
+from siphon.utils.retry import _with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ class SQLSource(Source):
             kwargs["partition_num"] = self.partition_num
         if self.partition_range is not None:
             kwargs["partition_range"] = self.partition_range
-        return cx.read_sql(conn, query, **kwargs)
+        return _with_retry(lambda: cx.read_sql(conn, query, **kwargs))
 
     def _extract_oracle_batches(
         self, query: str, chunk_size: int = _ORACLE_CHUNK_SIZE
@@ -104,7 +105,9 @@ class SQLSource(Source):
             )
 
         try:
-            conn = oracledb.connect(dsn=self._oracle_dsn(), tcp_connect_timeout=_CONNECT_TIMEOUT)
+            conn = _with_retry(
+                lambda: oracledb.connect(dsn=self._oracle_dsn(), tcp_connect_timeout=_CONNECT_TIMEOUT)
+            )
         except Exception as exc:
             raise RuntimeError(f"Oracle connection failed: {type(exc).__name__}") from None
         conn.outputtypehandler = _oracle_output_type_handler
