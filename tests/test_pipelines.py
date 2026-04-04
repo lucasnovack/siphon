@@ -37,6 +37,10 @@ def _make_pipeline():
     p.min_rows_expected = None
     p.max_rows_drop_pct = None
     p.pii_columns = None
+    p.webhook_url = None
+    p.alert_on = None
+    p.sla_minutes = None
+    p.partition_by = "none"
     p.created_at = datetime.now(tz=UTC)
     p.updated_at = datetime.now(tz=UTC)
     return p
@@ -122,7 +126,7 @@ def test_upsert_schedule_creates_schedule(client):
 
     with patch("siphon.pipelines.router._after_schedule_upsert", return_value=schedule_mock):
         resp = tc.put(f"/api/v1/pipelines/{p.id}/schedule", json={
-            "cron": "0 3 * * *",
+            "cron_expr": "0 3 * * *",
             "is_active": True,
         })
     assert resp.status_code == 200
@@ -177,3 +181,51 @@ def test_update_pipeline_pii_columns(client):
     })
     assert resp.status_code == 200
     assert resp.json()["pii_columns"] == {"ssn": "sha256"}
+
+
+def _make_pipeline_with_alerts():
+    p = _make_pipeline()
+    p.webhook_url = "https://hooks.slack.com/xyz"
+    p.alert_on = ["failed", "schema_changed"]
+    p.sla_minutes = 60
+    return p
+
+
+def test_create_pipeline_with_webhook(client):
+    tc, db = client
+    p = _make_pipeline_with_alerts()
+    db.execute = AsyncMock(return_value=MagicMock(
+        scalar_one_or_none=MagicMock(return_value=None)
+    ))
+    db.add = MagicMock()
+    db.commit = AsyncMock()
+    db.refresh = AsyncMock(side_effect=lambda obj: None)
+
+    with patch("siphon.pipelines.router._after_create", return_value=p):
+        resp = tc.post("/api/v1/pipelines", json={
+            "name": "webhook-pipeline",
+            "source_connection_id": str(uuid.uuid4()),
+            "dest_connection_id": str(uuid.uuid4()),
+            "query": "SELECT 1",
+            "destination_path": "bronze/wh/",
+            "webhook_url": "https://hooks.slack.com/xyz",
+            "alert_on": ["failed", "schema_changed"],
+            "sla_minutes": 60,
+        })
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["webhook_url"] == "https://hooks.slack.com/xyz"
+    assert body["alert_on"] == ["failed", "schema_changed"]
+    assert body["sla_minutes"] == 60
+
+
+def test_pipeline_response_includes_webhook_fields(client):
+    tc, db = client
+    p = _make_pipeline_with_alerts()
+    db.get = AsyncMock(return_value=p)
+    resp = tc.get(f"/api/v1/pipelines/{p.id}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "webhook_url" in body
+    assert "alert_on" in body
+    assert "sla_minutes" in body

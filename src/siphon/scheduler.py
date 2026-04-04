@@ -13,6 +13,7 @@ Design decisions:
 import logging
 import os
 import uuid
+from datetime import UTC, datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,14 @@ def start_scheduler() -> None:
         _scheduler = BackgroundScheduler(jobstores={"default": jobstore})
         _scheduler.start()
         logger.info("Scheduler started with PostgreSQL jobstore")
+        _scheduler.add_job(
+            _check_sla_violations,
+            trigger="interval",
+            minutes=5,
+            id="sla_checker",
+            replace_existing=True,
+        )
+        logger.info("SLA checker scheduled (every 5 minutes)")
     except Exception as exc:
         logger.error("Failed to start scheduler: %s", exc)
         _scheduler = None
@@ -201,6 +210,110 @@ def _uuid_to_lock_key(pipeline_id_str: str) -> int:
     return uuid.UUID(pipeline_id_str).int & 0x7FFFFFFFFFFFFFFF
 
 
+def _is_sla_breached(
+    last_success_at: "datetime | None",
+    sla_minutes: int,
+    sla_notified_at: "datetime | None",
+    now: "datetime",
+) -> bool:
+    """Return True if an SLA breach notification should be fired.
+
+    Conditions:
+    - last_success_at is None (never ran) OR now - last_success_at > sla_minutes
+    - AND we haven't sent a notification within the last sla_minutes
+    """
+    window = timedelta(minutes=sla_minutes)
+    overdue = last_success_at is None or (now - last_success_at) > window
+    if not overdue:
+        return False
+    recently_notified = sla_notified_at is not None and (now - sla_notified_at) < window
+    return not recently_notified
+
+
+def _build_sla_payload(
+    pipeline_id: str,
+    sla_minutes: int,
+    last_success_at: "datetime | None",
+    now: "datetime",
+) -> dict:
+    return {
+        "event": "sla_breach",
+        "pipeline_id": pipeline_id,
+        "sla_minutes": sla_minutes,
+        "last_success_at": last_success_at.isoformat() if last_success_at else None,
+        "timestamp": now.isoformat(),
+    }
+
+
+def _check_sla_violations() -> None:
+    """Run every 5 minutes: find SLA-breached pipelines and fire webhooks.
+
+    Uses a synchronous psycopg2 connection (same pattern as _fire_with_advisory_lock)
+    so it can run in the APScheduler background thread without an asyncio loop.
+    """
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        return
+
+    try:
+        import psycopg2
+        sync_url = database_url.replace("postgresql+asyncpg://", "postgresql://").replace(
+            "postgresql+psycopg2://", "postgresql://"
+        )
+        conn = psycopg2.connect(sync_url)
+        try:
+            _run_sla_check(conn)
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.error("SLA check failed: %s", exc)
+
+
+def _run_sla_check(conn) -> None:
+    """Core SLA check logic given a psycopg2 connection."""
+    import httpx
+
+    now = datetime.now(tz=UTC)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT p.id::text, p.webhook_url, p.sla_minutes, p.sla_notified_at
+            FROM pipelines p
+            WHERE p.sla_minutes IS NOT NULL
+              AND p.webhook_url IS NOT NULL
+            """
+        )
+        pipelines = cur.fetchall()
+
+        for pipeline_id, webhook_url, sla_minutes, sla_notified_at in pipelines:
+            cur.execute(
+                """
+                SELECT max(finished_at)
+                FROM job_runs
+                WHERE pipeline_id = %s::uuid
+                  AND status IN ('success', 'partial_success')
+                """,
+                (pipeline_id,),
+            )
+            (last_success_at,) = cur.fetchone()
+
+            if not _is_sla_breached(last_success_at, sla_minutes, sla_notified_at, now):
+                continue
+
+            payload = _build_sla_payload(pipeline_id, sla_minutes, last_success_at, now)
+            try:
+                httpx.post(webhook_url, json=payload, timeout=5)
+                logger.warning("SLA breach fired for pipeline %s", pipeline_id)
+            except Exception as exc:
+                logger.warning("SLA webhook POST failed for pipeline %s: %s", pipeline_id, exc)
+
+            cur.execute(
+                "UPDATE pipelines SET sla_notified_at = %s WHERE id = %s::uuid",
+                (now, pipeline_id),
+            )
+        conn.commit()
+
+
 def _enqueue_pipeline_async(pipeline_id_str: str) -> None:
     """Submit a pipeline trigger to the async queue from a background thread."""
     import asyncio
@@ -271,6 +384,7 @@ async def _async_trigger_pipeline(pipeline_id_str: str) -> None:
             "access_key": dest_config["access_key"],
             "secret_key": dest_config["secret_key"],
             "extraction_mode": p.extraction_mode,
+            "partition_by": p.partition_by or "none",
         }
 
         try:
@@ -284,6 +398,11 @@ async def _async_trigger_pipeline(pipeline_id_str: str) -> None:
             job_id=str(uuid_mod.uuid4()),
             pipeline_id=pipeline_id_str,
             pipeline_schema_hash=p.last_schema_hash,
+            pipeline_pii=p.pii_columns or None,
+            pipeline_alert=(
+                {"webhook_url": p.webhook_url, "alert_on": p.alert_on or ["failed"]}
+                if p.webhook_url else None
+            ),
             pipeline_dq={
                 "min_rows_expected": p.min_rows_expected,
                 "max_rows_drop_pct": p.max_rows_drop_pct,
