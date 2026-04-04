@@ -384,6 +384,7 @@ async def _async_trigger_pipeline(pipeline_id_str: str) -> None:
             "access_key": dest_config["access_key"],
             "secret_key": dest_config["secret_key"],
             "extraction_mode": p.extraction_mode,
+            "partition_by": p.partition_by or "none",
         }
 
         try:
@@ -397,6 +398,11 @@ async def _async_trigger_pipeline(pipeline_id_str: str) -> None:
             job_id=str(uuid_mod.uuid4()),
             pipeline_id=pipeline_id_str,
             pipeline_schema_hash=p.last_schema_hash,
+            pipeline_pii=p.pii_columns or None,
+            pipeline_alert=(
+                {"webhook_url": p.webhook_url, "alert_on": p.alert_on or ["failed"]}
+                if p.webhook_url else None
+            ),
             pipeline_dq={
                 "min_rows_expected": p.min_rows_expected,
                 "max_rows_drop_pct": p.max_rows_drop_pct,

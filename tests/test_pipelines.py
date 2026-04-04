@@ -40,6 +40,7 @@ def _make_pipeline():
     p.webhook_url = None
     p.alert_on = None
     p.sla_minutes = None
+    p.partition_by = "none"
     p.created_at = datetime.now(tz=UTC)
     p.updated_at = datetime.now(tz=UTC)
     return p
@@ -125,7 +126,7 @@ def test_upsert_schedule_creates_schedule(client):
 
     with patch("siphon.pipelines.router._after_schedule_upsert", return_value=schedule_mock):
         resp = tc.put(f"/api/v1/pipelines/{p.id}/schedule", json={
-            "cron": "0 3 * * *",
+            "cron_expr": "0 3 * * *",
             "is_active": True,
         })
     assert resp.status_code == 200

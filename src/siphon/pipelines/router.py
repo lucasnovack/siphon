@@ -49,6 +49,7 @@ class PipelineCreate(BaseModel):
     webhook_url: str | None = None
     alert_on: list[Literal["failed", "schema_changed"]] | None = None
     sla_minutes: int | None = None
+    partition_by: Literal["none", "ingest_date"] = "none"
 
     @field_validator("incremental_key")
     @classmethod
@@ -68,6 +69,7 @@ class PipelineUpdate(BaseModel):
     webhook_url: str | None = None
     alert_on: list[Literal["failed", "schema_changed"]] | None = None
     sla_minutes: int | None = None
+    partition_by: Literal["none", "ingest_date"] | None = None
 
     @field_validator("incremental_key")
     @classmethod
@@ -76,7 +78,7 @@ class PipelineUpdate(BaseModel):
 
 
 class ScheduleUpsert(BaseModel):
-    cron: str
+    cron_expr: str
     is_active: bool = True
 
 
@@ -120,6 +122,7 @@ class PipelineResponse(BaseModel):
     webhook_url: str | None
     alert_on: list[str] | None
     sla_minutes: int | None
+    partition_by: str
     is_active: bool
     schedule: ScheduleResponse | None
     created_at: datetime
@@ -151,6 +154,7 @@ def _to_response(p: Pipeline, schedule: Schedule | None = None) -> PipelineRespo
         webhook_url=p.webhook_url,
         alert_on=p.alert_on,
         sla_minutes=p.sla_minutes,
+        partition_by=p.partition_by or "none",
         is_active=True,
         schedule=sched,
         created_at=p.created_at,
@@ -212,6 +216,7 @@ async def create_pipeline(
         webhook_url=body.webhook_url,
         alert_on=body.alert_on,
         sla_minutes=body.sla_minutes,
+        partition_by=body.partition_by,
         created_at=now,
         updated_at=now,
     )
@@ -260,6 +265,8 @@ async def update_pipeline(
         p.webhook_url = body.webhook_url
     if "sla_minutes" in body.model_fields_set:
         p.sla_minutes = body.sla_minutes
+    if "partition_by" in body.model_fields_set:
+        p.partition_by = body.partition_by
     p.updated_at = datetime.now(tz=UTC)
     await db.commit()
     await db.refresh(p)
@@ -310,13 +317,13 @@ async def upsert_schedule(
     schedule = result.scalar_one_or_none()
     now = datetime.now(tz=UTC)
     if schedule:
-        schedule.cron = body.cron
+        schedule.cron = body.cron_expr
         schedule.is_active = body.is_active
         schedule.updated_at = now
     else:
         schedule = Schedule(
             pipeline_id=pipeline_id,
-            cron=body.cron,
+            cron=body.cron_expr,
             is_active=body.is_active,
             created_at=now,
             updated_at=now,
@@ -325,7 +332,7 @@ async def upsert_schedule(
     schedule = await _after_schedule_upsert(db, schedule)
     try:
         from siphon.scheduler import sync_schedule
-        await sync_schedule(pipeline_id, body.cron, body.is_active)
+        await sync_schedule(pipeline_id, body.cron_expr, body.is_active)
     except Exception:
         logger.warning("Scheduler sync failed for pipeline %s — schedule persisted but may not fire", pipeline_id, exc_info=True)
     return {"pipeline_id": str(pipeline_id), "cron": schedule.cron, "is_active": schedule.is_active}
@@ -418,6 +425,7 @@ async def trigger_pipeline(
         "access_key": dest_config["access_key"],
         "secret_key": dest_config["secret_key"],
         "extraction_mode": p.extraction_mode,
+        "partition_by": p.partition_by or "none",
     }
 
     try:
