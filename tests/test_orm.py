@@ -57,3 +57,25 @@ def test_pipeline_has_pii_columns_attr():
     )
     assert hasattr(p, "pii_columns")
     assert p.pii_columns is None  # nullable, defaults to None
+
+
+def test_pipeline_has_webhook_and_sla_attrs():
+    import uuid as _uuid
+    import datetime as _dt
+    from siphon.orm import Pipeline
+    p = Pipeline(
+        name="webhook-test",
+        source_connection_id=_uuid.uuid4(),
+        query="SELECT 1",
+        destination_path="bronze/t/",
+        created_at=_dt.datetime.now(),
+        updated_at=_dt.datetime.now(),
+    )
+    assert hasattr(p, "webhook_url")
+    assert p.webhook_url is None
+    assert hasattr(p, "alert_on")
+    assert p.alert_on is None
+    assert hasattr(p, "sla_minutes")
+    assert p.sla_minutes is None
+    assert hasattr(p, "sla_notified_at")
+    assert p.sla_notified_at is None
