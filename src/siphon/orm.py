@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, LargeBinary, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -62,6 +62,7 @@ class Pipeline(Base):
     incremental_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
     last_watermark: Mapped[str | None] = mapped_column(String(100), nullable=True)
     last_schema_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    pii_columns: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     min_rows_expected: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_rows_drop_pct: Mapped[int | None] = mapped_column(Integer, nullable=True)
     dest_connection_id: Mapped[uuid.UUID | None] = mapped_column(
