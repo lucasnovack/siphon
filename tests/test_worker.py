@@ -525,3 +525,60 @@ async def test_worker_fires_webhook_on_schema_change(executor):
 
     mock_wh.assert_called_once()
     assert mock_wh.call_args.args[1]["event"] == "schema_changed"
+
+
+async def test_worker_fires_both_events_on_failed_schema_change(executor):
+    """When job fails AND schema changed, both 'failed' and 'schema_changed' fire independently."""
+    import hashlib, json
+    from unittest.mock import patch
+
+    old_schema = [("x", "int64")]
+    old_hash = hashlib.sha256(json.dumps(old_schema, sort_keys=True).encode()).hexdigest()
+
+    class FailingNewSchemaSource(Source):
+        def extract(self):
+            raise RuntimeError("connection refused")
+
+        def extract_batches(self, chunk_size=100):
+            yield pa.table({"y": [1, 2, 3]})  # different schema
+            raise RuntimeError("connection refused mid-stream")
+
+    job = Job(
+        job_id="wh-both",
+        pipeline_schema_hash=old_hash,
+        pipeline_alert={
+            "webhook_url": "https://hooks.example.com/wh",
+            "alert_on": ["failed", "schema_changed"],
+        },
+    )
+
+    # Use a source that sets the schema (extract_batches yields one batch) but then fails
+    class SetSchemaFailSource(Source):
+        def extract(self):
+            raise RuntimeError("source error")
+
+        def extract_batches(self, chunk_size=100):
+            # First batch sets schema_hash, then failure happens outside
+            return iter([])  # empty — schema_hash won't be set, so schema_changed won't fire
+
+    # Simpler: directly test _maybe_fire_webhook with a job that has both conditions met
+    from siphon.worker import _maybe_fire_webhook
+    from siphon.models import Job as _Job
+
+    job2 = _Job(
+        job_id="wh-both-direct",
+        pipeline_schema_hash="old_hash_aaaa",
+        pipeline_alert={
+            "webhook_url": "https://hooks.example.com/wh",
+            "alert_on": ["failed", "schema_changed"],
+        },
+        status="failed",
+        schema_hash="new_hash_bbbb",
+    )
+
+    with patch("siphon.worker._fire_webhook") as mock_wh:
+        _maybe_fire_webhook(job2)
+
+    assert mock_wh.call_count == 2
+    fired_events = {call.args[1]["event"] for call in mock_wh.call_args_list}
+    assert fired_events == {"failed", "schema_changed"}
