@@ -41,6 +41,7 @@ class SFTPSource(Source):
         fail_fast: bool = False,
         processing_folder: str | None = None,
         processed_folder: str | None = None,
+        parser_config: dict | None = None,
     ) -> None:
         self.host = host
         self.port = port
@@ -54,7 +55,8 @@ class SFTPSource(Source):
         self.fail_fast = fail_fast
         self.processing_folder = processing_folder
         self.processed_folder = processed_folder
-        self._parser = get_parser(parser)()
+        _config = parser_config or {}
+        self._parser = get_parser(parser)(**_config)
         self.failed_files: list[str] = []
         self._origin_map: dict[str, str] = {}
 
