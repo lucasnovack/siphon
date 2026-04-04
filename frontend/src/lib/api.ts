@@ -119,6 +119,10 @@ export interface Pipeline {
   min_rows_expected: number | null
   max_rows_drop_pct: number | null
   pii_columns: Record<string, 'sha256' | 'redact'> | null
+  webhook_url: string | null
+  alert_on: string[] | null
+  sla_minutes: number | null
+  partition_by: 'none' | 'ingest_date'
   is_active: boolean
   created_at: string
   updated_at: string
