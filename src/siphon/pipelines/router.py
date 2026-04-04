@@ -390,7 +390,7 @@ async def trigger_pipeline(
         raise HTTPException(400, str(exc)) from exc
 
     source = source_cls(**req.source.model_dump(exclude={"type"}))
-    destination = dest_cls(**req.destination.model_dump(exclude={"type"}))
+    destination = dest_cls(**req.destination.model_dump(exclude={"type"}), job_id=job.job_id)
 
     # Create the job_run row first so worker can UPDATE it instead of INSERT
     now = datetime.now(tz=UTC)
