@@ -5,12 +5,13 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from siphon.auth.deps import Principal, get_current_principal
+from siphon.auth.router import limiter
 from siphon.crypto import decrypt, encrypt
 from siphon.db import get_db
 from siphon.orm import Connection
@@ -110,7 +111,9 @@ async def get_connection_types(
 
 
 @router.post("/test")
+@limiter.limit("20/minute")
 async def test_connection_unsaved(
+    request: Request,
     body: ConnectionTestRequest,
     _: Principal = Depends(get_current_principal),  # noqa: B008
 ) -> dict:

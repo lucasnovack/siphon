@@ -8,7 +8,16 @@ from datetime import UTC, datetime, timedelta
 import jwt as pyjwt
 from passlib.context import CryptContext
 
-_JWT_SECRET: str = os.getenv("SIPHON_JWT_SECRET", "dev-secret-change-in-production")
+_JWT_SECRET_DEFAULT = "dev-secret-change-in-production"
+_JWT_SECRET: str = os.getenv("SIPHON_JWT_SECRET", _JWT_SECRET_DEFAULT)
+
+if _JWT_SECRET == _JWT_SECRET_DEFAULT and os.getenv("SIPHON_DEV_MODE", "").lower() != "true":
+    import logging as _logging
+    _logging.getLogger(__name__).critical(
+        "SIPHON_JWT_SECRET is not set — all JWT tokens are signed with a publicly known default "
+        "secret and can be forged by anyone. Set SIPHON_JWT_SECRET to a cryptographically random "
+        "value before deploying. To suppress this in local dev, set SIPHON_DEV_MODE=true."
+    )
 _ALGORITHM = "HS256"
 _DEFAULT_ACCESS_EXPIRE_MINUTES = 15
 _REFRESH_TOKEN_EXPIRE_DAYS = 7
