@@ -139,6 +139,7 @@ class Job:
     pipeline_schema_hash: str | None = None  # last stored SHA-256 hash for schema evolution
     pipeline_pii: dict | None = None   # {column: "sha256" | "redact"}
     is_backfill: bool = False           # True when triggered with date_from/date_to
+    pipeline_alert: dict | None = None  # {webhook_url: str, alert_on: list[str]}
     schema_hash: str | None = None      # computed during extraction; written to job_runs
 
     def to_status(self) -> JobStatus:

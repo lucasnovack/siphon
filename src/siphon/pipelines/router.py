@@ -46,6 +46,9 @@ class PipelineCreate(BaseModel):
     min_rows_expected: int | None = None
     max_rows_drop_pct: int | None = None
     pii_columns: dict[str, Literal["sha256", "redact"]] | None = None
+    webhook_url: str | None = None
+    alert_on: list[Literal["failed", "schema_changed"]] | None = None
+    sla_minutes: int | None = None
 
     @field_validator("incremental_key")
     @classmethod
@@ -62,6 +65,9 @@ class PipelineUpdate(BaseModel):
     min_rows_expected: int | None = None
     max_rows_drop_pct: int | None = None
     pii_columns: dict[str, Literal["sha256", "redact"]] | None = None
+    webhook_url: str | None = None
+    alert_on: list[Literal["failed", "schema_changed"]] | None = None
+    sla_minutes: int | None = None
 
     @field_validator("incremental_key")
     @classmethod
@@ -111,6 +117,9 @@ class PipelineResponse(BaseModel):
     min_rows_expected: int | None
     max_rows_drop_pct: int | None
     pii_columns: dict[str, str] | None
+    webhook_url: str | None
+    alert_on: list[str] | None
+    sla_minutes: int | None
     is_active: bool
     schedule: ScheduleResponse | None
     created_at: datetime
@@ -139,6 +148,9 @@ def _to_response(p: Pipeline, schedule: Schedule | None = None) -> PipelineRespo
         min_rows_expected=p.min_rows_expected,
         max_rows_drop_pct=p.max_rows_drop_pct,
         pii_columns=p.pii_columns,
+        webhook_url=p.webhook_url,
+        alert_on=p.alert_on,
+        sla_minutes=p.sla_minutes,
         is_active=True,
         schedule=sched,
         created_at=p.created_at,
@@ -197,6 +209,9 @@ async def create_pipeline(
         min_rows_expected=body.min_rows_expected,
         max_rows_drop_pct=body.max_rows_drop_pct,
         pii_columns=body.pii_columns,
+        webhook_url=body.webhook_url,
+        alert_on=body.alert_on,
+        sla_minutes=body.sla_minutes,
         created_at=now,
         updated_at=now,
     )
@@ -231,6 +246,7 @@ async def update_pipeline(
     for field in (
         "name", "query", "destination_path", "extraction_mode",
         "incremental_key", "min_rows_expected", "max_rows_drop_pct",
+        "webhook_url", "sla_minutes",
     ):
         val = getattr(body, field)
         if val is not None:
@@ -238,6 +254,8 @@ async def update_pipeline(
     # Special handling for pii_columns: None means "not provided" but {} means "clear all rules"
     if body.pii_columns is not None:
         p.pii_columns = body.pii_columns
+    if body.alert_on is not None:
+        p.alert_on = body.alert_on
     p.updated_at = datetime.now(tz=UTC)
     await db.commit()
     await db.refresh(p)
@@ -415,6 +433,10 @@ async def trigger_pipeline(
             "prev_rows": None,
         } if has_dq else None,
         is_backfill=bool(body.date_from and body.date_to),
+        pipeline_alert=(
+            {"webhook_url": p.webhook_url, "alert_on": p.alert_on or ["failed"]}
+            if p.webhook_url else None
+        ),
     )
 
     try:
