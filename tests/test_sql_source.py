@@ -308,3 +308,46 @@ def test_oracle_empty_result():
         chunks = list(src.extract_batches())
 
     assert chunks == []
+
+
+# ── Retry logic ──────────────────────────────────────────────────────────────
+
+
+def test_extract_connectorx_retries_on_connection_error():
+    """cx.read_sql is retried on ConnectionError."""
+    call_count = 0
+
+    def flaky_read(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count < 3:
+            raise ConnectionError("transient")
+        return pa.table({"x": [1, 2]})
+
+    with patch("siphon.plugins.sources.sql.cx.read_sql", side_effect=flaky_read), \
+         patch("siphon.utils.retry.time") as mock_time:
+        cls = get_source("sql")
+        src = cls(connection="postgresql://u:p@localhost/db", query="SELECT 1")
+        table = src._extract_connectorx("postgresql://u:p@localhost/db", "SELECT 1")
+
+    assert table.num_rows == 2
+    assert call_count == 3
+    assert mock_time.sleep.call_count == 2
+
+
+def test_extract_connectorx_does_not_retry_value_error():
+    """ValueError (e.g. bad SQL) is not retried."""
+    call_count = 0
+
+    def bad_query(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        raise ValueError("invalid query")
+
+    with patch("siphon.plugins.sources.sql.cx.read_sql", side_effect=bad_query), \
+         pytest.raises(ValueError):
+        cls = get_source("sql")
+        src = cls(connection="postgresql://u:p@localhost/db", query="BAD")
+        src._extract_connectorx("postgresql://u:p@localhost/db", "BAD")
+
+    assert call_count == 1
