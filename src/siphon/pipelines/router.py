@@ -78,6 +78,18 @@ class TriggerRequest(BaseModel):
     date_from: str | None = None
     date_to: str | None = None
 
+    @field_validator("date_from", "date_to")
+    @classmethod
+    def must_be_iso8601(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        try:
+            from datetime import datetime as _dt
+            _dt.fromisoformat(v)
+        except ValueError:
+            raise ValueError("date_from/date_to must be a valid ISO-8601 datetime string")
+        return v
+
 
 class ScheduleResponse(BaseModel):
     cron_expr: str
@@ -336,6 +348,9 @@ async def trigger_pipeline(
     p = await db.get(Pipeline, pipeline_id)
     if not p:
         raise HTTPException(404, "Pipeline not found")
+
+    if bool(body.date_from) != bool(body.date_to):
+        raise HTTPException(400, "date_from and date_to must both be provided for a backfill run")
 
     src_conn = await db.get(Connection, p.source_connection_id)
     if not src_conn:
