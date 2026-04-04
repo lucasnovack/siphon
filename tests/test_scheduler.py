@@ -74,3 +74,70 @@ class TestSyncScheduleNoOp:
             await sched.remove_schedule(uuid.uuid4())
         finally:
             sched._scheduler = original
+
+
+# ── Phase 12 Task 7: SLA checker ─────────────────────────────────────────────
+import datetime
+from unittest.mock import MagicMock, patch
+
+from siphon.scheduler import _build_sla_payload, _is_sla_breached
+
+
+def test_is_sla_breached_true_when_no_last_success():
+    now = datetime.datetime(2026, 4, 4, 12, 0, tzinfo=datetime.timezone.utc)
+    assert _is_sla_breached(
+        last_success_at=None,
+        sla_minutes=60,
+        sla_notified_at=None,
+        now=now,
+    ) is True
+
+
+def test_is_sla_breached_true_when_overdue():
+    now = datetime.datetime(2026, 4, 4, 12, 0, tzinfo=datetime.timezone.utc)
+    last_success = datetime.datetime(2026, 4, 4, 10, 0, tzinfo=datetime.timezone.utc)  # 2h ago
+    assert _is_sla_breached(
+        last_success_at=last_success,
+        sla_minutes=60,
+        sla_notified_at=None,
+        now=now,
+    ) is True
+
+
+def test_is_sla_breached_false_when_within_window():
+    now = datetime.datetime(2026, 4, 4, 12, 0, tzinfo=datetime.timezone.utc)
+    last_success = datetime.datetime(2026, 4, 4, 11, 30, tzinfo=datetime.timezone.utc)  # 30 min ago
+    assert _is_sla_breached(
+        last_success_at=last_success,
+        sla_minutes=60,
+        sla_notified_at=None,
+        now=now,
+    ) is False
+
+
+def test_is_sla_breached_false_when_already_notified_recently():
+    now = datetime.datetime(2026, 4, 4, 12, 0, tzinfo=datetime.timezone.utc)
+    last_success = datetime.datetime(2026, 4, 4, 9, 0, tzinfo=datetime.timezone.utc)   # 3h ago
+    notified = datetime.datetime(2026, 4, 4, 11, 45, tzinfo=datetime.timezone.utc)     # 15 min ago
+    assert _is_sla_breached(
+        last_success_at=last_success,
+        sla_minutes=60,
+        sla_notified_at=notified,
+        now=now,
+    ) is False
+
+
+def test_build_sla_payload():
+    now = datetime.datetime(2026, 4, 4, 12, 0, tzinfo=datetime.timezone.utc)
+    last_success = datetime.datetime(2026, 4, 4, 10, 0, tzinfo=datetime.timezone.utc)
+    payload = _build_sla_payload(
+        pipeline_id="abc-123",
+        sla_minutes=60,
+        last_success_at=last_success,
+        now=now,
+    )
+    assert payload["event"] == "sla_breach"
+    assert payload["pipeline_id"] == "abc-123"
+    assert payload["sla_minutes"] == 60
+    assert "last_success_at" in payload
+    assert "timestamp" in payload

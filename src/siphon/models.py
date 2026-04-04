@@ -73,6 +73,7 @@ class S3ParquetDestinationConfig(BaseModel):
     secret_key: str
     compression: str = "snappy"
     extraction_mode: Literal["full_refresh", "incremental"] = "full_refresh"
+    partition_by: Literal["none", "ingest_date"] = "none"
 
     def __repr__(self) -> str:
         return (
@@ -137,6 +138,8 @@ class Job:
     pipeline_dq: dict | None = None     # {min_rows_expected, max_rows_drop_pct, prev_rows}
     pipeline_schema_hash: str | None = None  # last stored SHA-256 hash for schema evolution
     pipeline_pii: dict | None = None   # {column: "sha256" | "redact"}
+    is_backfill: bool = False           # True when triggered with date_from/date_to
+    pipeline_alert: dict | None = None  # {webhook_url: str, alert_on: list[str]}
     schema_hash: str | None = None      # computed during extraction; written to job_runs
 
     def to_status(self) -> JobStatus:

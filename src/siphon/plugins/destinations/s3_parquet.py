@@ -1,3 +1,4 @@
+import datetime
 import logging
 import os
 import uuid
@@ -25,6 +26,7 @@ class S3ParquetDestination(Destination):
         compression: str = "snappy",
         extraction_mode: str = "full_refresh",
         job_id: str = "",
+        partition_by: str = "none",
     ) -> None:
         _validate_path(path)
         self.path = path
@@ -34,6 +36,7 @@ class S3ParquetDestination(Destination):
         self.compression = compression
         self.extraction_mode = extraction_mode
         self.job_id = job_id
+        self.partition_by = partition_by
 
     @property
     def _staging_path(self) -> str:
@@ -50,6 +53,12 @@ class S3ParquetDestination(Destination):
 
     def write(self, table: pa.Table, is_first_chunk: bool = True) -> int:
         fs = self._make_fs()
+        partition_cols = None
+        if self.partition_by == "ingest_date":
+            date_str = str(datetime.date.today())
+            date_col = pa.array([date_str] * table.num_rows, type=pa.string())
+            table = table.append_column(pa.field("_date", pa.string()), date_col)
+            partition_cols = ["_date"]
         if self.job_id:
             root_path = self._staging_path
             behavior = "overwrite_or_ignore"
@@ -65,9 +74,13 @@ class S3ParquetDestination(Destination):
                 behavior = "delete_matching" if is_first_chunk else "overwrite_or_ignore"
                 basename_template = "part-{i}.parquet"
         logger.info(
-            "Writing %d rows to %s (mode=%s, behavior=%s)",
-            table.num_rows, root_path, self.extraction_mode, behavior,
+            "Writing %d rows to %s (mode=%s, behavior=%s, partition_by=%s)",
+            table.num_rows, root_path, self.extraction_mode, behavior, self.partition_by,
         )
+        write_kwargs = {}
+        if partition_cols:
+            write_kwargs["partition_cols"] = partition_cols
+
         pq.write_to_dataset(
             table,
             root_path=root_path,
@@ -75,6 +88,7 @@ class S3ParquetDestination(Destination):
             compression=self.compression,
             existing_data_behavior=behavior,
             basename_template=basename_template,
+            **write_kwargs,
         )
         return table.num_rows
 
@@ -98,15 +112,16 @@ class S3ParquetDestination(Destination):
         staging = self._staging_path
         root = self.path.replace("s3a://", "").replace("s3://", "").rstrip("/")
         try:
-            file_infos = fs.get_file_info(pafs.FileSelector(staging, recursive=False))
+            file_infos = fs.get_file_info(pafs.FileSelector(staging, recursive=True))
         except FileNotFoundError:
             logger.warning("Staging path %s not found during promote — nothing to promote", staging)
             return
         promoted = 0
         for info in file_infos:
             if info.type == pafs.FileType.File:
-                dest = f"{root}/{info.base_name}"
-                fs.copy_file(info.path, dest)
+                rel_path = info.path[len(staging):].lstrip("/")
+                dest_file = f"{root}/{rel_path}"
+                fs.copy_file(info.path, dest_file)
                 promoted += 1
         fs.delete_dir(staging)
         logger.info("Promoted %d files from %s to %s", promoted, staging, root)

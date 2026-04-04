@@ -46,6 +46,10 @@ class PipelineCreate(BaseModel):
     min_rows_expected: int | None = None
     max_rows_drop_pct: int | None = None
     pii_columns: dict[str, Literal["sha256", "redact"]] | None = None
+    webhook_url: str | None = None
+    alert_on: list[Literal["failed", "schema_changed"]] | None = None
+    sla_minutes: int | None = None
+    partition_by: Literal["none", "ingest_date"] = "none"
 
     @field_validator("incremental_key")
     @classmethod
@@ -62,6 +66,10 @@ class PipelineUpdate(BaseModel):
     min_rows_expected: int | None = None
     max_rows_drop_pct: int | None = None
     pii_columns: dict[str, Literal["sha256", "redact"]] | None = None
+    webhook_url: str | None = None
+    alert_on: list[Literal["failed", "schema_changed"]] | None = None
+    sla_minutes: int | None = None
+    partition_by: Literal["none", "ingest_date"] | None = None
 
     @field_validator("incremental_key")
     @classmethod
@@ -70,13 +78,25 @@ class PipelineUpdate(BaseModel):
 
 
 class ScheduleUpsert(BaseModel):
-    cron: str
+    cron_expr: str
     is_active: bool = True
 
 
 class TriggerRequest(BaseModel):
     date_from: str | None = None
     date_to: str | None = None
+
+    @field_validator("date_from", "date_to")
+    @classmethod
+    def must_be_iso8601(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        try:
+            from datetime import datetime as _dt
+            _dt.fromisoformat(v)
+        except ValueError:
+            raise ValueError("date_from/date_to must be a valid ISO-8601 datetime string")
+        return v
 
 
 class ScheduleResponse(BaseModel):
@@ -99,6 +119,10 @@ class PipelineResponse(BaseModel):
     min_rows_expected: int | None
     max_rows_drop_pct: int | None
     pii_columns: dict[str, str] | None
+    webhook_url: str | None
+    alert_on: list[str] | None
+    sla_minutes: int | None
+    partition_by: str
     is_active: bool
     schedule: ScheduleResponse | None
     created_at: datetime
@@ -127,6 +151,10 @@ def _to_response(p: Pipeline, schedule: Schedule | None = None) -> PipelineRespo
         min_rows_expected=p.min_rows_expected,
         max_rows_drop_pct=p.max_rows_drop_pct,
         pii_columns=p.pii_columns,
+        webhook_url=p.webhook_url,
+        alert_on=p.alert_on,
+        sla_minutes=p.sla_minutes,
+        partition_by=p.partition_by or "none",
         is_active=True,
         schedule=sched,
         created_at=p.created_at,
@@ -185,6 +213,10 @@ async def create_pipeline(
         min_rows_expected=body.min_rows_expected,
         max_rows_drop_pct=body.max_rows_drop_pct,
         pii_columns=body.pii_columns,
+        webhook_url=body.webhook_url,
+        alert_on=body.alert_on,
+        sla_minutes=body.sla_minutes,
+        partition_by=body.partition_by,
         created_at=now,
         updated_at=now,
     )
@@ -226,6 +258,15 @@ async def update_pipeline(
     # Special handling for pii_columns: None means "not provided" but {} means "clear all rules"
     if body.pii_columns is not None:
         p.pii_columns = body.pii_columns
+    if body.alert_on is not None:
+        p.alert_on = body.alert_on
+    # webhook_url and sla_minutes can be explicitly cleared via model_fields_set
+    if "webhook_url" in body.model_fields_set:
+        p.webhook_url = body.webhook_url
+    if "sla_minutes" in body.model_fields_set:
+        p.sla_minutes = body.sla_minutes
+    if "partition_by" in body.model_fields_set:
+        p.partition_by = body.partition_by
     p.updated_at = datetime.now(tz=UTC)
     await db.commit()
     await db.refresh(p)
@@ -276,13 +317,13 @@ async def upsert_schedule(
     schedule = result.scalar_one_or_none()
     now = datetime.now(tz=UTC)
     if schedule:
-        schedule.cron = body.cron
+        schedule.cron = body.cron_expr
         schedule.is_active = body.is_active
         schedule.updated_at = now
     else:
         schedule = Schedule(
             pipeline_id=pipeline_id,
-            cron=body.cron,
+            cron=body.cron_expr,
             is_active=body.is_active,
             created_at=now,
             updated_at=now,
@@ -291,7 +332,7 @@ async def upsert_schedule(
     schedule = await _after_schedule_upsert(db, schedule)
     try:
         from siphon.scheduler import sync_schedule
-        await sync_schedule(pipeline_id, body.cron, body.is_active)
+        await sync_schedule(pipeline_id, body.cron_expr, body.is_active)
     except Exception:
         logger.warning("Scheduler sync failed for pipeline %s — schedule persisted but may not fire", pipeline_id, exc_info=True)
     return {"pipeline_id": str(pipeline_id), "cron": schedule.cron, "is_active": schedule.is_active}
@@ -337,6 +378,9 @@ async def trigger_pipeline(
     if not p:
         raise HTTPException(404, "Pipeline not found")
 
+    if bool(body.date_from) != bool(body.date_to):
+        raise HTTPException(400, "date_from and date_to must both be provided for a backfill run")
+
     src_conn = await db.get(Connection, p.source_connection_id)
     if not src_conn:
         raise HTTPException(400, "Source connection not found")
@@ -351,7 +395,16 @@ async def trigger_pipeline(
     dest_config = json.loads(decrypt(dest_conn.encrypted_config))
 
     query = p.query
-    if p.extraction_mode == "incremental" and p.incremental_key and p.last_watermark:
+    if body.date_from and body.date_to:
+        # Backfill: inject two-sided window; watermark injection skipped
+        if not p.incremental_key:
+            raise HTTPException(400, "Backfill requires incremental_key to be set on the pipeline")
+        from siphon.pipelines.watermark import inject_backfill_window
+        dialect = src_config.get("connection", "").split("://")[0]
+        query = inject_backfill_window(
+            query, p.incremental_key, body.date_from, body.date_to, dialect
+        )
+    elif p.extraction_mode == "incremental" and p.incremental_key and p.last_watermark:
         from siphon.pipelines.watermark import inject_watermark
         dialect = src_config.get("connection", "").split("://")[0]
         query = inject_watermark(query, p.incremental_key, p.last_watermark, dialect)
@@ -372,6 +425,7 @@ async def trigger_pipeline(
         "access_key": dest_config["access_key"],
         "secret_key": dest_config["secret_key"],
         "extraction_mode": p.extraction_mode,
+        "partition_by": p.partition_by or "none",
     }
 
     try:
@@ -390,6 +444,11 @@ async def trigger_pipeline(
             "max_rows_drop_pct": p.max_rows_drop_pct,
             "prev_rows": None,
         } if has_dq else None,
+        is_backfill=bool(body.date_from and body.date_to),
+        pipeline_alert=(
+            {"webhook_url": p.webhook_url, "alert_on": p.alert_on or ["failed"]}
+            if p.webhook_url else None
+        ),
     )
 
     try:
@@ -407,7 +466,7 @@ async def trigger_pipeline(
         job_id=job.job_id,
         pipeline_id=pipeline_id,
         status="queued",
-        triggered_by="manual",
+        triggered_by="backfill" if job.is_backfill else "manual",
         created_at=now,
     )
     db.add(run)

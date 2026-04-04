@@ -6,6 +6,8 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
+import httpx
+
 from siphon.models import Job
 from siphon.plugins.destinations.base import Destination
 from siphon.plugins.sources.base import Source
@@ -80,6 +82,56 @@ def _apply_pii_masking(table, pii_columns: dict[str, str]):
             idx = table.schema.get_field_index(col_name)
             table = table.set_column(idx, col_name, null_col)
     return table
+
+
+# ── Webhook firing ───────────────────────────────────────────────────────────
+
+
+def _fire_webhook(url: str, payload: dict) -> None:
+    """POST *payload* as JSON to *url* with a 5-second timeout.
+
+    Failures are logged but never propagated — a broken webhook must not
+    affect the job result or the caller's control flow.
+    """
+    try:
+        httpx.post(url, json=payload, timeout=5)
+    except Exception as exc:
+        logger.warning("Webhook POST to %s failed: %s", url, exc)
+
+
+def _maybe_fire_webhook(job: "Job") -> None:
+    """Fire the pipeline webhook if the current job event matches alert_on."""
+    alert = job.pipeline_alert
+    if not alert:
+        return
+    url = alert.get("webhook_url")
+    alert_on = alert.get("alert_on") or ["failed"]
+    if not url:
+        return
+
+    events_to_fire = []
+    if job.status == "failed" and "failed" in alert_on:
+        events_to_fire.append("failed")
+    if (
+        "schema_changed" in alert_on
+        and job.schema_hash
+        and job.pipeline_schema_hash
+        and job.schema_hash != job.pipeline_schema_hash
+    ):
+        events_to_fire.append("schema_changed")
+
+    for event in events_to_fire:
+        payload = {
+            "event": event,
+            "pipeline_id": job.pipeline_id,
+            "job_id": job.job_id,
+            "status": job.status,
+            "error": job.error,
+            "rows_read": job.rows_read,
+            "rows_written": job.rows_written,
+            "timestamp": datetime.now(tz=UTC).isoformat(),
+        }
+        _fire_webhook(url, payload)
 
 
 # ── Core extraction ───────────────────────────────────────────────────────────
@@ -214,6 +266,8 @@ async def _update_pipeline_metadata(job: Job, db_factory) -> None:
         return
     if job.status not in ("success", "partial_success"):
         return
+    if job.is_backfill:
+        return  # backfill runs must not move the global watermark
     try:
         import uuid
 
@@ -354,3 +408,6 @@ async def run_job(
                     job.job_id,
                     exc,
                 )
+        # Fire webhook if configured and event matches
+        if job.pipeline_alert:
+            _maybe_fire_webhook(job)

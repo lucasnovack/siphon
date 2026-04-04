@@ -384,3 +384,169 @@ async def test_schema_hash_captured_before_pii_masking(executor):
     from siphon.worker import _compute_schema_hash
     original_schema = pa.table({"email": ["x"], "score": [1.0]}).schema
     assert job.schema_hash == _compute_schema_hash(original_schema)
+
+
+# ── Phase 12 Task 2: backfill watermark guard ─────────────────────────────────
+
+
+async def test_backfill_job_does_not_update_watermark(executor):
+    """When job.is_backfill=True, _update_pipeline_metadata must not update last_watermark."""
+    from unittest.mock import AsyncMock, patch
+
+    import uuid as _uuid
+    job = Job(job_id="backfill-1", pipeline_id=str(_uuid.uuid4()), is_backfill=True)
+    source = _OkSource()
+    dest = _OkDest()
+
+    with patch("siphon.worker._update_pipeline_metadata", new_callable=AsyncMock) as mock_update:
+        with patch("siphon.worker._persist_job_run", new_callable=AsyncMock):
+            await run_job(source, dest, job, executor, timeout=5, db_factory=AsyncMock())
+
+    assert job.status == "success"
+    mock_update.assert_awaited_once()
+
+
+async def test_normal_job_calls_update_pipeline_metadata(executor):
+    """Non-backfill jobs still call _update_pipeline_metadata."""
+    from unittest.mock import AsyncMock, patch
+
+    job = Job(job_id="normal-1", pipeline_id="some-uuid")
+    assert not job.is_backfill
+
+    with patch("siphon.worker._update_pipeline_metadata", new_callable=AsyncMock) as mock_update:
+        with patch("siphon.worker._persist_job_run", new_callable=AsyncMock):
+            await run_job(_OkSource(), _OkDest(), job, executor, timeout=5, db_factory=AsyncMock())
+    mock_update.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_update_pipeline_metadata_skips_on_backfill():
+    """_update_pipeline_metadata must return without touching DB when is_backfill=True."""
+    import uuid as _uuid
+    from unittest.mock import AsyncMock, MagicMock
+    from siphon.worker import _update_pipeline_metadata
+
+    job = Job(job_id="x", pipeline_id=str(_uuid.uuid4()), status="success", is_backfill=True)
+    mock_session = AsyncMock()
+    mock_factory = MagicMock()
+    mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+    await _update_pipeline_metadata(job, mock_factory)
+    # DB session must never be entered for a backfill job
+    mock_factory.return_value.__aenter__.assert_not_awaited()
+
+
+# ── Phase 12 Task 6: webhook firing ─────────────────────────────────────────────
+
+from siphon.worker import _fire_webhook
+
+
+def test_fire_webhook_posts_json():
+    """_fire_webhook sends a POST with the expected payload."""
+    from unittest.mock import patch, MagicMock
+
+    with patch("siphon.worker.httpx") as mock_httpx:
+        mock_httpx.post = MagicMock()
+        payload = {"event": "failed", "pipeline_id": "abc", "job_id": "j1"}
+        _fire_webhook("https://hooks.example.com/test", payload)
+
+    mock_httpx.post.assert_called_once_with(
+        "https://hooks.example.com/test",
+        json=payload,
+        timeout=5,
+    )
+
+
+def test_fire_webhook_silences_errors():
+    """_fire_webhook never raises — network failures are logged and swallowed."""
+    from unittest.mock import patch
+
+    with patch("siphon.worker.httpx") as mock_httpx:
+        mock_httpx.post.side_effect = Exception("network down")
+        _fire_webhook("https://hooks.example.com/test", {"event": "failed"})
+    # No exception raised
+
+
+async def test_worker_fires_webhook_on_failure(executor):
+    """When job fails and pipeline_alert is set with 'failed' in alert_on, webhook fires."""
+    from unittest.mock import patch, MagicMock
+
+    job = Job(
+        job_id="wh-fail",
+        pipeline_alert={"webhook_url": "https://hooks.example.com/wh", "alert_on": ["failed"]},
+    )
+
+    with patch("siphon.worker._fire_webhook") as mock_wh:
+        await run_job(_FailSource(), _OkDest(), job, executor, timeout=5)
+
+    assert job.status == "failed"
+    mock_wh.assert_called_once()
+    call_args = mock_wh.call_args
+    assert call_args.args[0] == "https://hooks.example.com/wh"
+    assert call_args.args[1]["event"] == "failed"
+
+
+async def test_worker_does_not_fire_webhook_on_success_without_event(executor):
+    """Webhook is NOT fired when job succeeds and alert_on=['failed']."""
+    from unittest.mock import patch
+
+    job = Job(
+        job_id="wh-ok",
+        pipeline_alert={"webhook_url": "https://hooks.example.com/wh", "alert_on": ["failed"]},
+    )
+
+    with patch("siphon.worker._fire_webhook") as mock_wh:
+        await run_job(_OkSource(), _OkDest(), job, executor, timeout=5)
+
+    assert job.status == "success"
+    mock_wh.assert_not_called()
+
+
+async def test_worker_fires_webhook_on_schema_change(executor):
+    """Webhook fires with event='schema_changed' when schema hash changed."""
+    import hashlib, json
+    from unittest.mock import patch
+
+    old_schema = [("x", "int64")]
+    old_hash = hashlib.sha256(json.dumps(old_schema, sort_keys=True).encode()).hexdigest()
+
+    job = Job(
+        job_id="wh-schema",
+        pipeline_schema_hash=old_hash,
+        pipeline_alert={"webhook_url": "https://hooks.example.com/wh", "alert_on": ["schema_changed"]},
+    )
+
+    class NewSchemaSource(Source):
+        def extract(self):
+            return pa.table({"y": [1, 2, 3]})  # different schema
+
+    with patch("siphon.worker._fire_webhook") as mock_wh:
+        await run_job(NewSchemaSource(), _OkDest(), job, executor, timeout=5)
+
+    mock_wh.assert_called_once()
+    assert mock_wh.call_args.args[1]["event"] == "schema_changed"
+
+
+def test_worker_fires_both_events_on_failed_schema_change():
+    """When job fails AND schema changed, both 'failed' and 'schema_changed' fire independently."""
+    from unittest.mock import patch
+    from siphon.worker import _maybe_fire_webhook
+    from siphon.models import Job as _Job
+
+    job = _Job(
+        job_id="wh-both-direct",
+        pipeline_schema_hash="old_hash_aaaa",
+        pipeline_alert={
+            "webhook_url": "https://hooks.example.com/wh",
+            "alert_on": ["failed", "schema_changed"],
+        },
+        status="failed",
+        schema_hash="new_hash_bbbb",
+    )
+
+    with patch("siphon.worker._fire_webhook") as mock_wh:
+        _maybe_fire_webhook(job)
+
+    assert mock_wh.call_count == 2
+    fired_events = {call.args[1]["event"] for call in mock_wh.call_args_list}
+    assert fired_events == {"failed", "schema_changed"}

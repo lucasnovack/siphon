@@ -29,6 +29,9 @@ const step3Schema = z.object({
   dest_prefix: z.string().min(1),
   min_rows_expected: z.coerce.number().optional(),
   max_rows_drop_pct: z.coerce.number().min(0).max(100).optional(),
+  partition_by: z.enum(['none', 'ingest_date']).default('none'),
+  webhook_url: z.string().optional(),
+  sla_minutes: z.coerce.number().optional(),
 })
 const step4Schema = z.object({
   name: z.string().min(1),
@@ -49,8 +52,9 @@ export function PipelineWizard() {
   type PiiRule = { column: string; method: 'sha256' | 'redact' }
   const [step1, setStep1] = useState<Step1>({ source_conn: '' })
   const [step2, setStep2] = useState<Step2>({ source_query: '', extraction_mode: 'full_refresh' })
-  const [step3, setStep3] = useState<Step3>({ dest_conn: '', dest_prefix: '' })
+  const [step3, setStep3] = useState<Step3>({ dest_conn: '', dest_prefix: '', partition_by: 'none' })
   const [piiRules, setPiiRules] = useState<PiiRule[]>([])
+  const [alertOn, setAlertOn] = useState<string[]>([])
   const [preview, setPreview] = useState<PreviewResponse | null>(null)
   const [previewing, setPreviewing] = useState(false)
   const [createError, setCreateError] = useState<unknown>(null)
@@ -97,6 +101,10 @@ export function PipelineWizard() {
       min_rows_expected: step3.min_rows_expected ?? null,
       max_rows_drop_pct: step3.max_rows_drop_pct ?? null,
       pii_columns,
+      partition_by: step3.partition_by ?? 'none',
+      webhook_url: step3.webhook_url || null,
+      alert_on: alertOn.length > 0 ? alertOn : null,
+      sla_minutes: step3.sla_minutes ?? null,
       schedule: s4.cron_expr ? { cron_expr: s4.cron_expr, is_active: true } : null,
     })
   }
@@ -317,6 +325,59 @@ export function PipelineWizard() {
                 )}
               </div>
 
+              {/* Partitioning */}
+              <div className="space-y-1">
+                <Label>Partitioning</Label>
+                <select
+                  value={step3.partition_by ?? 'none'}
+                  onChange={(e) => setStep3((s) => ({ ...s, partition_by: e.target.value as 'none' | 'ingest_date' }))}
+                  className="w-full h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm"
+                >
+                  <option value="none">None</option>
+                  <option value="ingest_date">Hive date (_date=YYYY-MM-DD/)</option>
+                </select>
+              </div>
+
+              {/* Alerting */}
+              <div className="space-y-2">
+                <Label>Alerting <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                <Input
+                  placeholder="Webhook URL (Slack / PagerDuty)"
+                  value={step3.webhook_url ?? ''}
+                  onChange={(e) => setStep3((s) => ({ ...s, webhook_url: e.target.value }))}
+                />
+                <div className="flex gap-4 text-sm">
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={alertOn.includes('failed')}
+                      onChange={(e) => setAlertOn((a) => e.target.checked ? [...a, 'failed'] : a.filter((v) => v !== 'failed'))}
+                    />
+                    on failure
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={alertOn.includes('schema_changed')}
+                      onChange={(e) => setAlertOn((a) => e.target.checked ? [...a, 'schema_changed'] : a.filter((v) => v !== 'schema_changed'))}
+                    />
+                    on schema change
+                  </label>
+                </div>
+                <div className="flex items-center gap-2 text-sm">
+                  <Label htmlFor="sla_minutes" className="whitespace-nowrap">SLA (minutes)</Label>
+                  <Input
+                    id="sla_minutes"
+                    type="number"
+                    min={1}
+                    placeholder="e.g. 60"
+                    value={step3.sla_minutes ?? ''}
+                    onChange={(e) => setStep3((s) => ({ ...s, sla_minutes: e.target.value ? Number(e.target.value) : undefined }))}
+                    className="w-28"
+                  />
+                </div>
+              </div>
+
               <div className="flex gap-2">
                 <Button variant="outline" onClick={() => setStep(1)}>Back</Button>
                 <Button disabled={!step3.dest_conn || !step3.dest_prefix} onClick={() => setStep(3)}>Next</Button>
@@ -355,6 +416,18 @@ export function PipelineWizard() {
                     <>
                       <span className="text-muted-foreground">PII rules</span>
                       <span className="font-mono">{piiRules.filter((r) => r.column).length} column(s)</span>
+                    </>
+                  )}
+                  {step3.webhook_url && (
+                    <>
+                      <span className="text-muted-foreground">Webhook</span>
+                      <span className="font-mono truncate">{step3.webhook_url}</span>
+                    </>
+                  )}
+                  {step3.partition_by !== 'none' && (
+                    <>
+                      <span className="text-muted-foreground">Partitioning</span>
+                      <span className="font-mono">{step3.partition_by}</span>
                     </>
                   )}
                 </div>

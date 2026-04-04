@@ -1,6 +1,6 @@
 # tests/test_watermark.py
 import pytest
-from siphon.pipelines.watermark import _cast_for_dialect, inject_watermark
+from siphon.pipelines.watermark import _cast_for_dialect, inject_watermark, inject_backfill_window
 
 
 class TestCastForDialect:
@@ -34,6 +34,9 @@ class TestCastForDialect:
         expr = _cast_for_dialect("2024-01-01T00:00:00'bad", "postgresql")
         assert "''" in expr
         assert "bad" in expr
+
+    def test_sqlserver_alias(self):
+        assert "DATETIMEOFFSET" in _cast_for_dialect("2024-01-01", "sqlserver")
 
 
 class TestInjectWatermark:
@@ -69,3 +72,39 @@ class TestInjectWatermark:
         assert lines[0].startswith("WITH _siphon_base AS (")
         assert any("SELECT * FROM _siphon_base" in l for l in lines)
         assert any("WHERE updated_at >" in l for l in lines)
+
+    def test_invalid_key_raises(self):
+        with pytest.raises(ValueError, match="incremental_key"):
+            inject_watermark(self.BASE, "bad key!", self.WM, "postgresql")
+
+
+class TestInjectBackfillWindow:
+    BASE = "SELECT id, updated_at FROM orders"
+    FROM = "2024-01-01T00:00:00+00:00"
+    TO = "2024-02-01T00:00:00+00:00"
+
+    def test_wraps_in_cte(self):
+        result = inject_backfill_window(self.BASE, "updated_at", self.FROM, self.TO, "postgresql")
+        assert "WITH _siphon_base AS (" in result
+        assert self.BASE in result
+        assert "SELECT * FROM _siphon_base" in result
+
+    def test_two_sided_where(self):
+        result = inject_backfill_window(self.BASE, "updated_at", self.FROM, self.TO, "postgresql")
+        assert "WHERE updated_at >=" in result
+        assert "AND updated_at <" in result
+        assert self.FROM in result
+        assert self.TO in result
+
+    def test_uses_dialect_cast(self):
+        result = inject_backfill_window(self.BASE, "updated_at", self.FROM, self.TO, "mysql")
+        assert "CAST(" in result
+        assert "DATETIME" in result
+
+    def test_invalid_key_raises(self):
+        with pytest.raises(ValueError, match="incremental_key"):
+            inject_backfill_window(self.BASE, "bad key!", self.FROM, self.TO, "postgresql")
+
+    def test_oracle_cast(self):
+        result = inject_backfill_window(self.BASE, "ts", self.FROM, self.TO, "oracle")
+        assert "TIMESTAMP WITH TIME ZONE" in result
