@@ -246,7 +246,6 @@ async def update_pipeline(
     for field in (
         "name", "query", "destination_path", "extraction_mode",
         "incremental_key", "min_rows_expected", "max_rows_drop_pct",
-        "webhook_url", "sla_minutes",
     ):
         val = getattr(body, field)
         if val is not None:
@@ -256,6 +255,11 @@ async def update_pipeline(
         p.pii_columns = body.pii_columns
     if body.alert_on is not None:
         p.alert_on = body.alert_on
+    # webhook_url and sla_minutes can be explicitly cleared via model_fields_set
+    if "webhook_url" in body.model_fields_set:
+        p.webhook_url = body.webhook_url
+    if "sla_minutes" in body.model_fields_set:
+        p.sla_minutes = body.sla_minutes
     p.updated_at = datetime.now(tz=UTC)
     await db.commit()
     await db.refresh(p)
