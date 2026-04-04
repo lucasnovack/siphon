@@ -10,7 +10,7 @@ from siphon.models import Job
 from siphon.orm import JobRun
 from siphon.plugins.destinations.base import Destination
 from siphon.plugins.sources.base import Source
-from siphon.worker import run_job
+from siphon.worker import _apply_pii_masking, run_job
 
 # ── Inline stubs ──────────────────────────────────────────────────────────────
 
@@ -216,6 +216,67 @@ async def test_run_job_skips_persistence_when_no_db_factory():
     ex.shutdown(wait=False)
 
 
+# ── Phase 11 Task 8: staging lifecycle ───────────────────────────────────────
+
+
+class _StagingDest(Destination):
+    """Destination that records cleanup and promote calls."""
+    def __init__(self):
+        self.cleanup_called = False
+        self.promote_called = False
+        self.cleanup_call_order = None
+        self.write_call_order = None
+        self._call_count = 0
+
+    def cleanup_staging(self):
+        self._call_count += 1
+        self.cleanup_called = True
+        self.cleanup_call_order = self._call_count
+
+    def write(self, table, is_first_chunk: bool = True) -> int:
+        self._call_count += 1
+        self.write_call_order = self._call_count
+        return table.num_rows
+
+    def promote(self):
+        self._call_count += 1
+        self.promote_called = True
+        self.promote_call_order = self._call_count
+
+
+async def test_staging_lifecycle_order(executor):
+    """cleanup → extract → promote is called in order on success."""
+    job = Job(job_id="staging-test")
+    source = _OkSource()
+    dest = _StagingDest()
+
+    await run_job(source, dest, job, executor, timeout=5)
+
+    assert job.status == "success"
+    assert dest.cleanup_called
+    assert dest.promote_called
+    assert dest.cleanup_call_order < dest.write_call_order < dest.promote_call_order
+
+
+async def test_promote_not_called_on_failure(executor):
+    """promote is NOT called when job fails."""
+    job = Job(job_id="fail-test")
+    dest = _StagingDest()
+
+    await run_job(_FailSource(), dest, job, executor, timeout=5)
+
+    assert job.status == "failed"
+    assert dest.cleanup_called
+    assert not dest.promote_called
+
+
+async def test_cleanup_called_even_without_staging_methods(executor):
+    """Worker works fine with destinations that have no staging methods."""
+    job = Job(job_id="no-staging")
+    await run_job(_OkSource(), _OkDest(), job, executor, timeout=5)
+    assert job.status == "success"
+
+
 @pytest.mark.asyncio
 async def test_run_job_persistence_failure_does_not_affect_job_status():
     """DB write failure must not change job.status — extraction already succeeded."""
@@ -240,3 +301,86 @@ async def test_run_job_persistence_failure_does_not_affect_job_status():
 
     assert job.status == "success"
     ex.shutdown(wait=False)
+
+
+# ── Phase 11 Task 11: PII masking ────────────────────────────────────────────
+
+
+def test_pii_masking_sha256():
+    import hashlib
+    table = pa.table({"email": ["alice@example.com", "bob@example.com"], "score": [9, 8]})
+    result = _apply_pii_masking(table, {"email": "sha256"})
+    expected_hash = hashlib.sha256(b"alice@example.com").hexdigest()
+    assert result.column("email").to_pylist()[0] == expected_hash
+    assert result.column("score").to_pylist() == [9, 8]  # unchanged
+
+
+def test_pii_masking_redact():
+    table = pa.table({"token": ["abc123", "xyz789"], "id": [1, 2]})
+    result = _apply_pii_masking(table, {"token": "redact"})
+    assert result.column("token").to_pylist() == [None, None]
+    assert result.column("id").to_pylist() == [1, 2]
+
+
+def test_pii_masking_skips_missing_columns():
+    table = pa.table({"id": [1, 2], "name": ["a", "b"]})
+    result = _apply_pii_masking(table, {"email": "sha256", "phone": "redact"})
+    assert result.schema.names == ["id", "name"]  # no extra columns
+
+
+def test_pii_masking_multiple_columns():
+    import hashlib
+    table = pa.table({"email": ["a@b.com"], "cpf": ["123.456.789-00"], "value": [100]})
+    result = _apply_pii_masking(table, {"email": "sha256", "cpf": "sha256", "value": "redact"})
+    assert result.column("email").to_pylist()[0] == hashlib.sha256(b"a@b.com").hexdigest()
+    assert result.column("cpf").to_pylist()[0] == hashlib.sha256(b"123.456.789-00").hexdigest()
+    assert result.column("value").to_pylist() == [None]
+
+
+async def test_worker_applies_pii_masking(executor):
+    """Worker calls _apply_pii_masking before write when pipeline_pii is set."""
+    import hashlib
+
+    class EmailSource(Source):
+        def extract(self) -> pa.Table:
+            return pa.table({"email": ["user@example.com"], "id": [1]})
+
+    class CaptureDest(Destination):
+        def __init__(self):
+            self.written = None
+        def write(self, table, is_first_chunk: bool = True) -> int:
+            self.written = table
+            return table.num_rows
+
+    dest = CaptureDest()
+    job = Job(job_id="pii-test", pipeline_pii={"email": "sha256"})
+    await run_job(EmailSource(), dest, job, executor, timeout=5)
+
+    assert job.status == "success"
+    written_emails = dest.written.column("email").to_pylist()
+    assert written_emails[0] == hashlib.sha256(b"user@example.com").hexdigest()
+
+
+async def test_schema_hash_captured_before_pii_masking(executor):
+    """schema_hash reflects original column types, not the masked string columns."""
+
+    class EmailSource(Source):
+        def extract(self) -> pa.Table:
+            return pa.table({"email": ["user@example.com"], "score": [9.5]})
+
+    class CaptureDest(Destination):
+        def __init__(self):
+            self.written_schema = None
+        def write(self, table, is_first_chunk: bool = True) -> int:
+            self.written_schema = table.schema
+            return table.num_rows
+
+    dest = CaptureDest()
+    job = Job(job_id="schema-hash-test", pipeline_pii={"email": "sha256"})
+    await run_job(EmailSource(), dest, job, executor, timeout=5)
+
+    assert job.schema_hash is not None
+    # schema_hash computed from original schema (email as string, score as double)
+    from siphon.worker import _compute_schema_hash
+    original_schema = pa.table({"email": ["x"], "score": [1.0]}).schema
+    assert job.schema_hash == _compute_schema_hash(original_schema)

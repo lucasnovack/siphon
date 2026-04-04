@@ -36,6 +36,7 @@ def _make_pipeline():
     p.last_schema_hash = None
     p.min_rows_expected = None
     p.max_rows_drop_pct = None
+    p.pii_columns = None
     p.created_at = datetime.now(tz=UTC)
     p.updated_at = datetime.now(tz=UTC)
     return p
@@ -125,3 +126,54 @@ def test_upsert_schedule_creates_schedule(client):
             "is_active": True,
         })
     assert resp.status_code == 200
+
+
+def test_create_pipeline_with_pii_columns(client):
+    tc, db = client
+    p = _make_pipeline()
+    p.pii_columns = {"email": "sha256", "cpf": "sha256", "token": "redact"}
+    db.execute = AsyncMock(return_value=MagicMock(
+        scalar_one_or_none=MagicMock(return_value=None)
+    ))
+    db.add = MagicMock()
+    db.commit = AsyncMock()
+    db.refresh = AsyncMock(side_effect=lambda obj: None)
+
+    with patch("siphon.pipelines.router._after_create", return_value=p):
+        resp = tc.post("/api/v1/pipelines", json={
+            "name": "pii-test-pipeline",
+            "source_connection_id": str(p.source_connection_id),
+            "dest_connection_id": str(p.dest_connection_id),
+            "query": "SELECT * FROM t",
+            "destination_path": "bronze/pii-test/",
+            "pii_columns": {"email": "sha256", "cpf": "sha256", "token": "redact"},
+        })
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["pii_columns"] == {"email": "sha256", "cpf": "sha256", "token": "redact"}
+
+
+def test_get_pipeline_returns_pii_columns(client):
+    tc, db = client
+    p = _make_pipeline()
+    p.pii_columns = {"phone": "redact"}
+    db.get = AsyncMock(return_value=p)
+
+    resp = tc.get(f"/api/v1/pipelines/{p.id}")
+    assert resp.status_code == 200
+    assert resp.json()["pii_columns"] == {"phone": "redact"}
+
+
+def test_update_pipeline_pii_columns(client):
+    tc, db = client
+    p = _make_pipeline()
+    p.pii_columns = {"ssn": "sha256"}
+    db.get = AsyncMock(return_value=p)
+    db.commit = AsyncMock()
+    db.refresh = AsyncMock(side_effect=lambda obj: None)
+
+    resp = tc.put(f"/api/v1/pipelines/{p.id}", json={
+        "pii_columns": {"ssn": "sha256"}
+    })
+    assert resp.status_code == 200
+    assert resp.json()["pii_columns"] == {"ssn": "sha256"}

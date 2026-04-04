@@ -46,9 +46,11 @@ export function PipelineWizard() {
   const navigate = useNavigate()
   const qc = useQueryClient()
   const [step, setStep] = useState(0)
+  type PiiRule = { column: string; method: 'sha256' | 'redact' }
   const [step1, setStep1] = useState<Step1>({ source_conn: '' })
   const [step2, setStep2] = useState<Step2>({ source_query: '', extraction_mode: 'full_refresh' })
   const [step3, setStep3] = useState<Step3>({ dest_conn: '', dest_prefix: '' })
+  const [piiRules, setPiiRules] = useState<PiiRule[]>([])
   const [preview, setPreview] = useState<PreviewResponse | null>(null)
   const [previewing, setPreviewing] = useState(false)
   const [createError, setCreateError] = useState<unknown>(null)
@@ -80,6 +82,10 @@ export function PipelineWizard() {
   }
 
   function handleCreate(s4: Step4) {
+    const pii_columns = piiRules.length > 0
+      ? Object.fromEntries(piiRules.filter((r) => r.column).map((r) => [r.column, r.method]))
+      : null
+
     createMutation.mutate({
       name: s4.name,
       source_connection_id: step1.source_conn,
@@ -90,6 +96,7 @@ export function PipelineWizard() {
       destination_path: step3.dest_prefix,
       min_rows_expected: step3.min_rows_expected ?? null,
       max_rows_drop_pct: step3.max_rows_drop_pct ?? null,
+      pii_columns,
       schedule: s4.cron_expr ? { cron_expr: s4.cron_expr, is_active: true } : null,
     })
   }
@@ -257,6 +264,59 @@ export function PipelineWizard() {
                   />
                 </div>
               </div>
+              {/* PII Masking */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label>PII Masking <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPiiRules((r) => [...r, { column: '', method: 'sha256' }])}
+                  >
+                    + Add rule
+                  </Button>
+                </div>
+                {piiRules.length > 0 && (
+                  <div className="space-y-2">
+                    {piiRules.map((rule, i) => (
+                      <div key={i} className="flex gap-2 items-center">
+                        <Input
+                          placeholder="column_name"
+                          value={rule.column}
+                          onChange={(e) =>
+                            setPiiRules((rs) =>
+                              rs.map((r, j) => j === i ? { ...r, column: e.target.value } : r)
+                            )
+                          }
+                          className="flex-1"
+                        />
+                        <select
+                          value={rule.method}
+                          onChange={(e) =>
+                            setPiiRules((rs) =>
+                              rs.map((r, j) => j === i ? { ...r, method: e.target.value as 'sha256' | 'redact' } : r)
+                            )
+                          }
+                          className="h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm"
+                        >
+                          <option value="sha256">sha256</option>
+                          <option value="redact">redact</option>
+                        </select>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setPiiRules((rs) => rs.filter((_, j) => j !== i))}
+                        >
+                          ✕
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               <div className="flex gap-2">
                 <Button variant="outline" onClick={() => setStep(1)}>Back</Button>
                 <Button disabled={!step3.dest_conn || !step3.dest_prefix} onClick={() => setStep(3)}>Next</Button>
@@ -291,6 +351,12 @@ export function PipelineWizard() {
                   <span className="text-muted-foreground">Mode</span><span>{step2.extraction_mode}</span>
                   <span className="text-muted-foreground">Destination</span><span className="font-mono">{step3.dest_conn.slice(0, 8)}…</span>
                   <span className="text-muted-foreground">Prefix</span><span className="font-mono">{step3.dest_prefix}</span>
+                  {piiRules.filter((r) => r.column).length > 0 && (
+                    <>
+                      <span className="text-muted-foreground">PII rules</span>
+                      <span className="font-mono">{piiRules.filter((r) => r.column).length} column(s)</span>
+                    </>
+                  )}
                 </div>
               </div>
 

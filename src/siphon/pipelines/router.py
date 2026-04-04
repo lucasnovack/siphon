@@ -45,6 +45,7 @@ class PipelineCreate(BaseModel):
     incremental_key: str | None = None
     min_rows_expected: int | None = None
     max_rows_drop_pct: int | None = None
+    pii_columns: dict[str, Literal["sha256", "redact"]] | None = None
 
     @field_validator("incremental_key")
     @classmethod
@@ -60,6 +61,7 @@ class PipelineUpdate(BaseModel):
     incremental_key: str | None = None
     min_rows_expected: int | None = None
     max_rows_drop_pct: int | None = None
+    pii_columns: dict[str, Literal["sha256", "redact"]] | None = None
 
     @field_validator("incremental_key")
     @classmethod
@@ -96,6 +98,7 @@ class PipelineResponse(BaseModel):
     last_schema_hash: str | None
     min_rows_expected: int | None
     max_rows_drop_pct: int | None
+    pii_columns: dict[str, str] | None
     is_active: bool
     schedule: ScheduleResponse | None
     created_at: datetime
@@ -123,6 +126,7 @@ def _to_response(p: Pipeline, schedule: Schedule | None = None) -> PipelineRespo
         last_schema_hash=p.last_schema_hash,
         min_rows_expected=p.min_rows_expected,
         max_rows_drop_pct=p.max_rows_drop_pct,
+        pii_columns=p.pii_columns,
         is_active=True,
         schedule=sched,
         created_at=p.created_at,
@@ -180,6 +184,7 @@ async def create_pipeline(
         incremental_key=body.incremental_key,
         min_rows_expected=body.min_rows_expected,
         max_rows_drop_pct=body.max_rows_drop_pct,
+        pii_columns=body.pii_columns,
         created_at=now,
         updated_at=now,
     )
@@ -218,6 +223,9 @@ async def update_pipeline(
         val = getattr(body, field)
         if val is not None:
             setattr(p, field, val)
+    # Special handling for pii_columns: None means "not provided" but {} means "clear all rules"
+    if body.pii_columns is not None:
+        p.pii_columns = body.pii_columns
     p.updated_at = datetime.now(tz=UTC)
     await db.commit()
     await db.refresh(p)
@@ -376,6 +384,7 @@ async def trigger_pipeline(
         job_id=str(uuid.uuid4()),
         pipeline_id=str(pipeline_id),
         pipeline_schema_hash=p.last_schema_hash,
+        pipeline_pii=p.pii_columns or None,
         pipeline_dq={
             "min_rows_expected": p.min_rows_expected,
             "max_rows_drop_pct": p.max_rows_drop_pct,
@@ -390,7 +399,7 @@ async def trigger_pipeline(
         raise HTTPException(400, str(exc)) from exc
 
     source = source_cls(**req.source.model_dump(exclude={"type"}))
-    destination = dest_cls(**req.destination.model_dump(exclude={"type"}))
+    destination = dest_cls(**req.destination.model_dump(exclude={"type"}), job_id=job.job_id)
 
     # Create the job_run row first so worker can UPDATE it instead of INSERT
     now = datetime.now(tz=UTC)

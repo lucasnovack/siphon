@@ -118,6 +118,7 @@ export interface Pipeline {
   last_schema_hash: string | null
   min_rows_expected: number | null
   max_rows_drop_pct: number | null
+  pii_columns: Record<string, 'sha256' | 'redact'> | null
   is_active: boolean
   created_at: string
   updated_at: string

@@ -13,6 +13,7 @@ import pyarrow as pa
 from siphon.plugins.parsers import get as get_parser
 from siphon.plugins.sources import register
 from siphon.plugins.sources.base import Source
+from siphon.utils.retry import _with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,7 @@ class SFTPSource(Source):
         fail_fast: bool = False,
         processing_folder: str | None = None,
         processed_folder: str | None = None,
+        parser_config: dict | None = None,
     ) -> None:
         self.host = host
         self.port = port
@@ -54,7 +56,8 @@ class SFTPSource(Source):
         self.fail_fast = fail_fast
         self.processing_folder = processing_folder
         self.processed_folder = processed_folder
-        self._parser = get_parser(parser)()
+        _config = parser_config or {}
+        self._parser = get_parser(parser)(**_config)
         self.failed_files: list[str] = []
         self._origin_map: dict[str, str] = {}
 
@@ -63,6 +66,16 @@ class SFTPSource(Source):
         if not tables:
             return pa.table({})
         return pa.concat_tables(tables)
+
+    def _download_file(self, sftp, path: str) -> bytes:
+        """Download raw bytes from SFTP — no retry (caller handles retry)."""
+        with sftp.open(path, "rb") as f:
+            return f.read()
+
+    def _download_and_parse(self, sftp, path: str) -> pa.Table:
+        """Download and parse a single file, wrapped by _with_retry in extract_batches."""
+        data = self._download_file(sftp, path)
+        return self._parser.parse(data)
 
     def extract_batches(self, chunk_size: int = 100) -> Iterator[pa.Table]:
         self.failed_files = []
@@ -76,8 +89,7 @@ class SFTPSource(Source):
                 tables = []
                 for f in chunk:
                     try:
-                        data = self._download_with_retry(sftp, f)
-                        table = self._parser.parse(data)
+                        table = _with_retry(lambda p=f: self._download_and_parse(sftp, p))
                         tables.append(table)
                         if self.processed_folder:
                             self._move_to_processed(sftp, f)
@@ -175,22 +187,3 @@ class SFTPSource(Source):
                 exc,
             )
 
-    def _download_with_retry(self, sftp, path: str, max_retries: int = 3) -> bytes:
-        delay = 1.0
-        for attempt in range(max_retries + 1):
-            try:
-                with sftp.open(path, "rb") as f:
-                    return f.read()
-            except Exception as exc:
-                if attempt == max_retries:
-                    raise
-                logger.warning(
-                    "Download attempt %d/%d failed for %s: %s",
-                    attempt + 1,
-                    max_retries,
-                    path,
-                    exc,
-                )
-                time.sleep(delay)
-                delay = min(delay * 2, 30.0)
-        raise RuntimeError("unreachable")  # pragma: no cover
