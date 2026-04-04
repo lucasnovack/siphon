@@ -284,27 +284,105 @@ class TestChunking:
 
 
 class TestRetry:
-    def test_download_retry_on_failure(self):
-        """_download_with_retry retries on IOError and succeeds eventually."""
+    def test_download_file_reads_bytes(self):
+        """_download_file reads raw bytes from SFTP."""
         sftp = MagicMock()
-        call_count = {"n": 0}
-
         good_fh = MagicMock()
         good_fh.__enter__ = MagicMock(return_value=good_fh)
         good_fh.__exit__ = MagicMock(return_value=False)
         good_fh.read.return_value = b"success"
-
-        def open_side_effect(path, mode):
-            call_count["n"] += 1
-            if call_count["n"] < 3:
-                raise OSError("transient")
-            return good_fh
-
-        sftp.open.side_effect = open_side_effect
+        sftp.open.return_value = good_fh
 
         src = _make_source()
-        with patch("time.sleep"):  # avoid real sleeping
-            result = src._download_with_retry(sftp, "/data/file.bin")
+        result = src._download_file(sftp, "/data/file.bin")
 
         assert result == b"success"
-        assert call_count["n"] == 3
+        sftp.open.assert_called_once_with("/data/file.bin", "rb")
+
+    def test_download_and_parse_retries_on_os_error(self):
+        """_download_and_parse with _with_retry retries on OSError."""
+        from siphon.utils.retry import _with_retry
+
+        call_count = 0
+
+        def flaky_open(path, mode):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 2:
+                raise OSError("connection reset")
+            mock_file = MagicMock()
+            mock_file.__enter__ = MagicMock(return_value=mock_file)
+            mock_file.__exit__ = MagicMock(return_value=False)
+            mock_file.read = MagicMock(return_value=b"id,v\n1,2\n")
+            return mock_file
+
+        mock_sftp = MagicMock()
+        mock_sftp.open = flaky_open
+
+        # Use csv parser so we can parse the fake data
+        src = _make_source(parser="csv")
+
+        with patch("siphon.utils.retry.time"):
+            table = _with_retry(lambda p="/test.csv": src._download_and_parse(mock_sftp, p))
+
+        assert call_count == 2
+        assert table.num_rows == 1
+
+
+# ── parser_config ────────────────────────────────────────────────────────────
+
+
+class TestParserConfig:
+    def test_sftp_source_config_accepts_parser_config(self):
+        from siphon.models import SFTPSourceConfig
+        cfg = SFTPSourceConfig(
+            type="sftp",
+            host="h",
+            port=22,
+            username="u",
+            password="p",
+            paths=["/data"],
+            parser="csv",
+            parser_config={"delimiter": ";", "encoding": "latin-1"},
+        )
+        assert cfg.parser_config == {"delimiter": ";", "encoding": "latin-1"}
+
+    def test_sftp_source_config_parser_config_defaults_empty(self):
+        from siphon.models import SFTPSourceConfig
+        cfg = SFTPSourceConfig(
+            type="sftp",
+            host="h",
+            port=22,
+            username="u",
+            password="p",
+            paths=["/data"],
+            parser="csv",
+        )
+        assert cfg.parser_config == {}
+
+    def test_sftp_source_uses_parser_config(self):
+        """SFTPSource passes parser_config kwargs to the parser constructor."""
+        from siphon.plugins.parsers import _REGISTRY
+
+        # Register a spy parser
+        call_kwargs = {}
+
+        class SpyParser:
+            def __init__(self, **kwargs):
+                call_kwargs.update(kwargs)
+
+            def parse(self, data: bytes) -> pa.Table:
+                return pa.table({"x": [1]})
+
+        _REGISTRY["spy"] = SpyParser
+
+        try:
+            from siphon.plugins.sources.sftp import SFTPSource
+            src = SFTPSource(
+                host="h", port=22, username="u", password="p",
+                paths=["/"], parser="spy",
+                parser_config={"custom_arg": True},
+            )
+            assert call_kwargs == {"custom_arg": True}
+        finally:
+            del _REGISTRY["spy"]

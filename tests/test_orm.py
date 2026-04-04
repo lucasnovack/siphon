@@ -41,3 +41,19 @@ def test_base_metadata_has_all_tables():
     assert set(Base.metadata.tables.keys()) == {
         "users", "refresh_tokens", "connections", "pipelines", "schedules", "job_runs"
     }
+
+
+def test_pipeline_has_pii_columns_attr():
+    import uuid as _uuid
+    import datetime as _dt
+    from siphon.orm import Pipeline
+    p = Pipeline(
+        name="test",
+        source_connection_id=_uuid.uuid4(),
+        query="SELECT 1",
+        destination_path="bronze/t/",
+        created_at=_dt.datetime.now(),
+        updated_at=_dt.datetime.now(),
+    )
+    assert hasattr(p, "pii_columns")
+    assert p.pii_columns is None  # nullable, defaults to None

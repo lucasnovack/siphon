@@ -31,3 +31,4 @@ Siphon is a self-hosted data pipeline service that extracts data from SQL databa
 | Add a new UI page | [frontend.md → Adding a new page](frontend.md#adding-a-new-page) |
 | Understand JWT + refresh tokens | [auth.md → How authentication works](auth.md#how-authentication-works) |
 | Integrate with Airflow | [pipelines.md → Legacy API](pipelines.md#legacy-api-airflow-integration) |
+| See what's planned next | [roadmap.md](roadmap.md) |

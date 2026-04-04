@@ -54,6 +54,34 @@ def _check_data_quality(dq: dict, rows_read: int) -> str | None:
     return None
 
 
+# ── PII masking ───────────────────────────────────────────────────────────────
+
+
+def _apply_pii_masking(table, pii_columns: dict[str, str]):
+    """Apply sha256 hashing or redaction to specified columns.
+
+    Columns not present in the table are silently skipped.
+    Schema hash should be captured BEFORE calling this function.
+    """
+    import pyarrow as pa
+
+    for col_name, method in pii_columns.items():
+        if col_name not in table.schema.names:
+            continue
+        if method == "sha256":
+            hashed = pa.array(
+                [hashlib.sha256(str(v).encode()).hexdigest() if v is not None else None
+                 for v in table.column(col_name).to_pylist()]
+            )
+            idx = table.schema.get_field_index(col_name)
+            table = table.set_column(idx, col_name, hashed)
+        elif method == "redact":
+            null_col = pa.array([None] * table.num_rows, type=pa.null())
+            idx = table.schema.get_field_index(col_name)
+            table = table.set_column(idx, col_name, null_col)
+    return table
+
+
 # ── Core extraction ───────────────────────────────────────────────────────────
 
 
@@ -68,6 +96,10 @@ def _sync_extract_and_write(
     When ``job.pipeline_dq`` is set, all batches are buffered so the row count
     can be checked before any write occurs (spec §18 data quality).
     """
+    # Clean up any stale staging from a previous crashed run
+    if hasattr(destination, "cleanup_staging"):
+        destination.cleanup_staging()
+
     dq = job.pipeline_dq
 
     if dq is not None:
@@ -88,6 +120,8 @@ def _sync_extract_and_write(
 
         rows_written = 0
         for i, batch in enumerate(batches):
+            if job.pipeline_pii:
+                batch = _apply_pii_masking(batch, job.pipeline_pii)
             rows_written += destination.write(batch, is_first_chunk=(i == 0))
         return rows_read, rows_written
 
@@ -98,6 +132,8 @@ def _sync_extract_and_write(
         if i == 0:
             job.schema_hash = _compute_schema_hash(batch.schema)
         rows_read += batch.num_rows
+        if job.pipeline_pii:
+            batch = _apply_pii_masking(batch, job.pipeline_pii)
         rows_written += destination.write(batch, is_first_chunk=(i == 0))
     return rows_read, rows_written
 
@@ -193,8 +229,10 @@ async def _update_pipeline_metadata(job: Job, db_factory) -> None:
             pipeline = result.scalar_one_or_none()
             if pipeline is None:
                 return
-            if pipeline.extraction_mode == "incremental":
-                pipeline.last_watermark = datetime.now(tz=UTC).isoformat()
+            # Always update the watermark on success so that switching from
+            # full → incremental starts from the last successful run, not from
+            # a stale watermark left by a previous incremental run.
+            pipeline.last_watermark = datetime.now(tz=UTC).isoformat()
             if job.schema_hash:
                 pipeline.last_schema_hash = job.schema_hash
             pipeline.updated_at = datetime.now(tz=UTC)
@@ -306,3 +344,13 @@ async def run_job(
         if db_factory is not None:
             await _persist_job_run(job, db_factory)
             await _update_pipeline_metadata(job, db_factory)
+        # Promote staging to final path after DB commit (idempotent writes)
+        if job.status in ("success", "partial_success") and hasattr(destination, "promote"):
+            try:
+                await loop.run_in_executor(executor, destination.promote)
+            except Exception as exc:
+                logger.error(
+                    "Failed to promote staging for job %s: %s — data may be in staging path",
+                    job.job_id,
+                    exc,
+                )

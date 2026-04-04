@@ -47,6 +47,7 @@ class SFTPSourceConfig(BaseModel):
     password: str
     paths: list[str]
     parser: str
+    parser_config: dict = Field(default_factory=dict)
     skip_patterns: list[str] = Field(default_factory=lambda: ["TMP_*"])
     max_files: int = 1000
     chunk_size: int = 100
@@ -71,6 +72,7 @@ class S3ParquetDestinationConfig(BaseModel):
     access_key: str
     secret_key: str
     compression: str = "snappy"
+    extraction_mode: Literal["full_refresh", "incremental"] = "full_refresh"
 
     def __repr__(self) -> str:
         return (
@@ -134,6 +136,7 @@ class Job:
     pipeline_id: str | None = None      # UUID string; used to update watermark/schema hash
     pipeline_dq: dict | None = None     # {min_rows_expected, max_rows_drop_pct, prev_rows}
     pipeline_schema_hash: str | None = None  # last stored SHA-256 hash for schema evolution
+    pipeline_pii: dict | None = None   # {column: "sha256" | "redact"}
     schema_hash: str | None = None      # computed during extraction; written to job_runs
 
     def to_status(self) -> JobStatus:
