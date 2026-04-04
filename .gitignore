@@ -11,3 +11,4 @@ dist/
 .worktrees/
 docs/superpowers/
 memory/
+debug.ipynb

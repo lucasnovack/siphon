@@ -82,7 +82,7 @@ def test_create_connection_returns_201(client, monkeypatch):
     with patch("siphon.connections.router._after_create", return_value=row):
         resp = tc.post("/api/v1/connections", json={
             "name": "prod-mysql",
-            "conn_type": "sql",
+            "type": "sql",
             "config": {"connection": "mysql://u:p@host/db"},
         })
     assert resp.status_code == 201
@@ -135,7 +135,7 @@ def test_create_connection_conflict_returns_409(client):
     ))
     resp = tc.post("/api/v1/connections", json={
         "name": "prod-mysql",
-        "conn_type": "sql",
+        "type": "sql",
         "config": {"connection": "mysql://u:p@host/db"},
     })
     assert resp.status_code == 409
@@ -179,7 +179,7 @@ def test_create_connection_requires_admin(monkeypatch):
     tc = TestClient(app)
     resp = tc.post("/api/v1/connections", json={
         "name": "test",
-        "conn_type": "sql",
+        "type": "sql",
         "config": {"connection": "mysql://u:p@host/db"},
     })
     assert resp.status_code == 403

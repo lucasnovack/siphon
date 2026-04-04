@@ -1,19 +1,36 @@
 # src/siphon/pipelines/router.py
 import json
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, field_validator
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import logging
+
 from siphon.auth.deps import Principal, get_current_principal
+from siphon.auth.router import limiter
 from siphon.db import get_db
 from siphon.orm import Connection, JobRun, Pipeline, Schedule
 
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
+logger = logging.getLogger(__name__)
+
+_VALID_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
+
+
+def _validate_incremental_key(v: str | None) -> str | None:
+    if v is not None and not _VALID_IDENTIFIER.match(v):
+        raise ValueError(
+            "incremental_key must be a plain SQL identifier "
+            "(letters, digits, underscores, dots only)"
+        )
+    return v
+
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
@@ -29,6 +46,11 @@ class PipelineCreate(BaseModel):
     min_rows_expected: int | None = None
     max_rows_drop_pct: int | None = None
 
+    @field_validator("incremental_key")
+    @classmethod
+    def validate_incremental_key(cls, v: str | None) -> str | None:
+        return _validate_incremental_key(v)
+
 
 class PipelineUpdate(BaseModel):
     name: str | None = None
@@ -38,6 +60,11 @@ class PipelineUpdate(BaseModel):
     incremental_key: str | None = None
     min_rows_expected: int | None = None
     max_rows_drop_pct: int | None = None
+
+    @field_validator("incremental_key")
+    @classmethod
+    def validate_incremental_key(cls, v: str | None) -> str | None:
+        return _validate_incremental_key(v)
 
 
 class ScheduleUpsert(BaseModel):
@@ -207,6 +234,18 @@ async def delete_pipeline(
     p = await db.get(Pipeline, pipeline_id)
     if not p:
         raise HTTPException(404, "Pipeline not found")
+    from sqlalchemy import update as sa_update
+    # Null out pipeline_id on job_runs first and flush so the FK is cleared before DELETE
+    await db.execute(
+        sa_update(JobRun).where(JobRun.pipeline_id == pipeline_id).values(pipeline_id=None)
+    )
+    await db.flush()
+    # Remove schedule (FK: schedules.pipeline_id → pipelines.id, no cascade)
+    sched_result = await db.execute(select(Schedule).where(Schedule.pipeline_id == pipeline_id))
+    schedule = sched_result.scalar_one_or_none()
+    if schedule:
+        await db.delete(schedule)
+        await db.flush()
     await db.delete(p)
     await db.commit()
 
@@ -246,7 +285,7 @@ async def upsert_schedule(
         from siphon.scheduler import sync_schedule
         await sync_schedule(pipeline_id, body.cron, body.is_active)
     except Exception:
-        pass
+        logger.warning("Scheduler sync failed for pipeline %s — schedule persisted but may not fire", pipeline_id, exc_info=True)
     return {"pipeline_id": str(pipeline_id), "cron": schedule.cron, "is_active": schedule.is_active}
 
 
@@ -266,14 +305,16 @@ async def delete_schedule(
         from siphon.scheduler import remove_schedule
         await remove_schedule(pipeline_id)
     except Exception:
-        pass
+        logger.warning("Scheduler removal failed for pipeline %s", pipeline_id, exc_info=True)
 
 
 # ── Trigger ───────────────────────────────────────────────────────────────────
 
 
 @router.post("/{pipeline_id}/trigger", status_code=202)
+@limiter.limit("60/minute")
 async def trigger_pipeline(
+    request: Request,
     pipeline_id: uuid.UUID,
     body: TriggerRequest = TriggerRequest(),
     principal: Principal = Depends(get_current_principal),  # noqa: B008
@@ -322,6 +363,7 @@ async def trigger_pipeline(
         "endpoint": dest_config["endpoint"],
         "access_key": dest_config["access_key"],
         "secret_key": dest_config["secret_key"],
+        "extraction_mode": p.extraction_mode,
     }
 
     try:
