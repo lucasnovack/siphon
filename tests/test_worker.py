@@ -384,3 +384,34 @@ async def test_schema_hash_captured_before_pii_masking(executor):
     from siphon.worker import _compute_schema_hash
     original_schema = pa.table({"email": ["x"], "score": [1.0]}).schema
     assert job.schema_hash == _compute_schema_hash(original_schema)
+
+
+# ── Phase 12 Task 2: backfill watermark guard ─────────────────────────────────
+
+
+async def test_backfill_job_does_not_update_watermark(executor):
+    """When job.is_backfill=True, _update_pipeline_metadata must not update last_watermark."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    job = Job(job_id="backfill-1", pipeline_id="some-uuid", is_backfill=True)
+    source = _OkSource()
+    dest = _OkDest()
+
+    with patch("siphon.worker._update_pipeline_metadata") as mock_update:
+        mock_update.return_value = None
+        await run_job(source, dest, job, executor, timeout=5, db_factory=AsyncMock())
+
+    assert job.status == "success"
+
+
+async def test_normal_job_calls_update_pipeline_metadata(executor):
+    """Non-backfill jobs still call _update_pipeline_metadata."""
+    from unittest.mock import AsyncMock, patch
+
+    job = Job(job_id="normal-1", pipeline_id="some-uuid")
+    assert not job.is_backfill
+
+    with patch("siphon.worker._update_pipeline_metadata", new_callable=AsyncMock) as mock_update:
+        with patch("siphon.worker._persist_job_run", new_callable=AsyncMock):
+            await run_job(_OkSource(), _OkDest(), job, executor, timeout=5, db_factory=AsyncMock())
+    mock_update.assert_awaited_once()
