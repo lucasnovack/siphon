@@ -384,6 +384,7 @@ async def trigger_pipeline(
         job_id=str(uuid.uuid4()),
         pipeline_id=str(pipeline_id),
         pipeline_schema_hash=p.last_schema_hash,
+        pipeline_pii=p.pii_columns or None,
         pipeline_dq={
             "min_rows_expected": p.min_rows_expected,
             "max_rows_drop_pct": p.max_rows_drop_pct,

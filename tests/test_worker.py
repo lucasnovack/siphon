@@ -10,7 +10,7 @@ from siphon.models import Job
 from siphon.orm import JobRun
 from siphon.plugins.destinations.base import Destination
 from siphon.plugins.sources.base import Source
-from siphon.worker import run_job
+from siphon.worker import _apply_pii_masking, run_job
 
 # ── Inline stubs ──────────────────────────────────────────────────────────────
 
@@ -301,3 +301,86 @@ async def test_run_job_persistence_failure_does_not_affect_job_status():
 
     assert job.status == "success"
     ex.shutdown(wait=False)
+
+
+# ── Phase 11 Task 11: PII masking ────────────────────────────────────────────
+
+
+def test_pii_masking_sha256():
+    import hashlib
+    table = pa.table({"email": ["alice@example.com", "bob@example.com"], "score": [9, 8]})
+    result = _apply_pii_masking(table, {"email": "sha256"})
+    expected_hash = hashlib.sha256(b"alice@example.com").hexdigest()
+    assert result.column("email").to_pylist()[0] == expected_hash
+    assert result.column("score").to_pylist() == [9, 8]  # unchanged
+
+
+def test_pii_masking_redact():
+    table = pa.table({"token": ["abc123", "xyz789"], "id": [1, 2]})
+    result = _apply_pii_masking(table, {"token": "redact"})
+    assert result.column("token").to_pylist() == [None, None]
+    assert result.column("id").to_pylist() == [1, 2]
+
+
+def test_pii_masking_skips_missing_columns():
+    table = pa.table({"id": [1, 2], "name": ["a", "b"]})
+    result = _apply_pii_masking(table, {"email": "sha256", "phone": "redact"})
+    assert result.schema.names == ["id", "name"]  # no extra columns
+
+
+def test_pii_masking_multiple_columns():
+    import hashlib
+    table = pa.table({"email": ["a@b.com"], "cpf": ["123.456.789-00"], "value": [100]})
+    result = _apply_pii_masking(table, {"email": "sha256", "cpf": "sha256", "value": "redact"})
+    assert result.column("email").to_pylist()[0] == hashlib.sha256(b"a@b.com").hexdigest()
+    assert result.column("cpf").to_pylist()[0] == hashlib.sha256(b"123.456.789-00").hexdigest()
+    assert result.column("value").to_pylist() == [None]
+
+
+async def test_worker_applies_pii_masking(executor):
+    """Worker calls _apply_pii_masking before write when pipeline_pii is set."""
+    import hashlib
+
+    class EmailSource(Source):
+        def extract(self) -> pa.Table:
+            return pa.table({"email": ["user@example.com"], "id": [1]})
+
+    class CaptureDest(Destination):
+        def __init__(self):
+            self.written = None
+        def write(self, table, is_first_chunk: bool = True) -> int:
+            self.written = table
+            return table.num_rows
+
+    dest = CaptureDest()
+    job = Job(job_id="pii-test", pipeline_pii={"email": "sha256"})
+    await run_job(EmailSource(), dest, job, executor, timeout=5)
+
+    assert job.status == "success"
+    written_emails = dest.written.column("email").to_pylist()
+    assert written_emails[0] == hashlib.sha256(b"user@example.com").hexdigest()
+
+
+async def test_schema_hash_captured_before_pii_masking(executor):
+    """schema_hash reflects original column types, not the masked string columns."""
+
+    class EmailSource(Source):
+        def extract(self) -> pa.Table:
+            return pa.table({"email": ["user@example.com"], "score": [9.5]})
+
+    class CaptureDest(Destination):
+        def __init__(self):
+            self.written_schema = None
+        def write(self, table, is_first_chunk: bool = True) -> int:
+            self.written_schema = table.schema
+            return table.num_rows
+
+    dest = CaptureDest()
+    job = Job(job_id="schema-hash-test", pipeline_pii={"email": "sha256"})
+    await run_job(EmailSource(), dest, job, executor, timeout=5)
+
+    assert job.schema_hash is not None
+    # schema_hash computed from original schema (email as string, score as double)
+    from siphon.worker import _compute_schema_hash
+    original_schema = pa.table({"email": ["x"], "score": [1.0]}).schema
+    assert job.schema_hash == _compute_schema_hash(original_schema)
