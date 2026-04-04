@@ -68,6 +68,10 @@ def _sync_extract_and_write(
     When ``job.pipeline_dq`` is set, all batches are buffered so the row count
     can be checked before any write occurs (spec §18 data quality).
     """
+    # Clean up any stale staging from a previous crashed run
+    if hasattr(destination, "cleanup_staging"):
+        destination.cleanup_staging()
+
     dq = job.pipeline_dq
 
     if dq is not None:
@@ -308,3 +312,13 @@ async def run_job(
         if db_factory is not None:
             await _persist_job_run(job, db_factory)
             await _update_pipeline_metadata(job, db_factory)
+        # Promote staging to final path after DB commit (idempotent writes)
+        if job.status in ("success", "partial_success") and hasattr(destination, "promote"):
+            try:
+                await loop.run_in_executor(executor, destination.promote)
+            except Exception as exc:
+                logger.error(
+                    "Failed to promote staging for job %s: %s — data may be in staging path",
+                    job.job_id,
+                    exc,
+                )

@@ -216,6 +216,67 @@ async def test_run_job_skips_persistence_when_no_db_factory():
     ex.shutdown(wait=False)
 
 
+# ── Phase 11 Task 8: staging lifecycle ───────────────────────────────────────
+
+
+class _StagingDest(Destination):
+    """Destination that records cleanup and promote calls."""
+    def __init__(self):
+        self.cleanup_called = False
+        self.promote_called = False
+        self.cleanup_call_order = None
+        self.write_call_order = None
+        self._call_count = 0
+
+    def cleanup_staging(self):
+        self._call_count += 1
+        self.cleanup_called = True
+        self.cleanup_call_order = self._call_count
+
+    def write(self, table, is_first_chunk: bool = True) -> int:
+        self._call_count += 1
+        self.write_call_order = self._call_count
+        return table.num_rows
+
+    def promote(self):
+        self._call_count += 1
+        self.promote_called = True
+        self.promote_call_order = self._call_count
+
+
+async def test_staging_lifecycle_order(executor):
+    """cleanup → extract → promote is called in order on success."""
+    job = Job(job_id="staging-test")
+    source = _OkSource()
+    dest = _StagingDest()
+
+    await run_job(source, dest, job, executor, timeout=5)
+
+    assert job.status == "success"
+    assert dest.cleanup_called
+    assert dest.promote_called
+    assert dest.cleanup_call_order < dest.write_call_order < dest.promote_call_order
+
+
+async def test_promote_not_called_on_failure(executor):
+    """promote is NOT called when job fails."""
+    job = Job(job_id="fail-test")
+    dest = _StagingDest()
+
+    await run_job(_FailSource(), dest, job, executor, timeout=5)
+
+    assert job.status == "failed"
+    assert dest.cleanup_called
+    assert not dest.promote_called
+
+
+async def test_cleanup_called_even_without_staging_methods(executor):
+    """Worker works fine with destinations that have no staging methods."""
+    job = Job(job_id="no-staging")
+    await run_job(_OkSource(), _OkDest(), job, executor, timeout=5)
+    assert job.status == "success"
+
+
 @pytest.mark.asyncio
 async def test_run_job_persistence_failure_does_not_affect_job_status():
     """DB write failure must not change job.status — extraction already succeeded."""
