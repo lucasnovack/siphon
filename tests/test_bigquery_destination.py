@@ -1,5 +1,5 @@
 # tests/test_bigquery_destination.py
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pyarrow as pa
 import pytest
@@ -71,6 +71,7 @@ def test_write_append_uses_write_append_disposition():
     mock_job.result.assert_called_once()
     _, kwargs = mock_client.load_table_from_dataframe.call_args
     assert kwargs["job_config"].write_disposition == "WRITE_APPEND"
+    mock_bq.Client.assert_called_once_with(project="my-proj", credentials=ANY, location="US")
 
 
 def test_write_replace_first_chunk_uses_write_truncate():
