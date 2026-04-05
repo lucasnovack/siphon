@@ -40,6 +40,9 @@ dev = [
 gcp = [
     "google-cloud-bigquery[pandas]>=3.27",
 ]
+snowflake = [
+    "snowflake-connector-python[pandas]>=3.12",
+]
 
 [build-system]
 requires = ["hatchling"]
