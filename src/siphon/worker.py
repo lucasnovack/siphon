@@ -37,6 +37,52 @@ def _compute_schema_hash(schema) -> str:
     return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
 
 
+# ── Schema registry ───────────────────────────────────────────────────────────
+
+
+def _schema_to_dict(schema) -> list[dict]:
+    """Serialize an Arrow schema to a JSON-safe list of field descriptors.
+
+    Format: [{"name": "col", "type": "int64", "nullable": True}, ...]
+    """
+    return [
+        {"name": field.name, "type": str(field.type), "nullable": field.nullable}
+        for field in schema
+    ]
+
+
+def _check_schema(actual, expected: list[dict]) -> str | None:
+    """Validate *actual* Arrow schema against *expected* field descriptors.
+
+    Rules:
+    - Missing column (in expected but not actual): error
+    - Type mismatch: error
+    - Extra column (in actual but not expected): warning log only, no error
+
+    Returns an error message string on failure, None on success.
+    """
+    expected_map = {f["name"]: f["type"] for f in expected}
+    actual_map = {field.name: str(field.type) for field in actual}
+
+    missing = [n for n in expected_map if n not in actual_map]
+    if missing:
+        return f"Schema validation failed: missing columns {missing}"
+
+    mismatched = [
+        f"{n}: expected {expected_map[n]!r}, got {actual_map[n]!r}"
+        for n in expected_map
+        if n in actual_map and actual_map[n] != expected_map[n]
+    ]
+    if mismatched:
+        return f"Schema validation failed: type mismatch [{', '.join(mismatched)}]"
+
+    extra = [n for n in actual_map if n not in expected_map]
+    if extra:
+        logger.warning("extra_columns_not_in_expected_schema", columns=extra)
+
+    return None
+
+
 # ── Data quality ──────────────────────────────────────────────────────────────
 
 
