@@ -191,9 +191,9 @@ class Job:
     pipeline_alert: dict | None = None  # {webhook_url: str, alert_on: list[str]}
     pipeline_expected_schema: list[dict] | None = None  # expected Arrow schema for DQ
     schema_hash: str | None = None      # computed during extraction; written to job_runs
-    _actual_schema: object = field(default=None, repr=False)  # transient; not serialized
     source_connection_id: str | None = None   # UUID string; populated by trigger_pipeline
     destination_path: str | None = None        # resolved S3/BQ/Snowflake path
+    _actual_schema: object = field(default=None, repr=False)  # transient; not serialized
 
     def to_status(self) -> JobStatus:
         """Convert internal Job to API-facing JobStatus."""
