@@ -95,6 +95,22 @@ class S3ParquetDestinationConfig(BaseModel):
         )
 
 
+class BigQueryDestinationConfig(BaseModel):
+    type: Literal["bigquery"]
+    project: str
+    dataset: str
+    table: str
+    credentials_json: str  # full service account JSON as a string
+    write_mode: Literal["append", "replace"] = "append"
+    location: str = "US"
+
+    def __repr__(self) -> str:
+        return (
+            f"BigQueryDestinationConfig(project={self.project!r}, "
+            f"dataset={self.dataset!r}, table={self.table!r})"
+        )
+
+
 # ── Request / response models ─────────────────────────────────────────────────
 
 SourceConfig = Annotated[
@@ -102,13 +118,15 @@ SourceConfig = Annotated[
     Field(discriminator="type"),
 ]
 
-# DestinationConfig: single member for now — add more types as plugins are added.
-# Pydantic v2 discriminator requires 2+ members in a union, so we type directly.
+DestinationConfig = Annotated[
+    S3ParquetDestinationConfig | BigQueryDestinationConfig,
+    Field(discriminator="type"),
+]
 
 
 class ExtractRequest(BaseModel):
     source: SourceConfig
-    destination: S3ParquetDestinationConfig
+    destination: DestinationConfig
 
 
 class JobStatus(BaseModel):
