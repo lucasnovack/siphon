@@ -2,17 +2,17 @@
 import asyncio
 import hashlib
 import json
-import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 import httpx
+import structlog
 
 from siphon.models import Job
 from siphon.plugins.destinations.base import Destination
 from siphon.plugins.sources.base import Source
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 try:
     from siphon.metrics import (

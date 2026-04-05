@@ -1,10 +1,10 @@
 # src/siphon/queue.py
 import asyncio
-import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
+import structlog
 from fastapi import HTTPException
 
 from siphon import worker
@@ -12,7 +12,7 @@ from siphon.models import Job
 from siphon.plugins.destinations.base import Destination
 from siphon.plugins.sources.base import Source
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 
 class JobQueue:
