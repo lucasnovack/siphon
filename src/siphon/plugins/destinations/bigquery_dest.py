@@ -37,7 +37,7 @@ class BigQueryDestination(Destination):
             json.loads(self.credentials_json),
             scopes=["https://www.googleapis.com/auth/cloud-platform"],
         )
-        return bigquery.Client(project=self.project, credentials=creds)
+        return bigquery.Client(project=self.project, credentials=creds, location=self.location)
 
     def write(self, table: pa.Table, is_first_chunk: bool = True) -> int:
         bigquery = importlib.import_module("google.cloud.bigquery")
@@ -50,10 +50,7 @@ class BigQueryDestination(Destination):
         else:
             disposition = bigquery.WriteDisposition.WRITE_APPEND
 
-        job_config = bigquery.LoadJobConfig(
-            write_disposition=disposition,
-            location=self.location,
-        )
+        job_config = bigquery.LoadJobConfig(write_disposition=disposition)
 
         df = table.to_pandas()
         logger.info(
