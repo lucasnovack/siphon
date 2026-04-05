@@ -37,6 +37,9 @@ dev = [
     "httpx>=0.27",
     "ruff>=0.8",
 ]
+gcp = [
+    "google-cloud-bigquery[pandas]>=3.27",
+]
 
 [build-system]
 requires = ["hatchling"]
