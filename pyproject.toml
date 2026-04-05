@@ -27,6 +27,7 @@ dependencies = [
     "cryptography>=42.0",
     "apscheduler[sqlalchemy]>=3.10",
     "prometheus-client>=0.20",
+    "requests>=2.32",
 ]
 
 [project.optional-dependencies]
