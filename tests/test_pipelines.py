@@ -229,3 +229,44 @@ def test_pipeline_response_includes_webhook_fields(client):
     assert "webhook_url" in body
     assert "alert_on" in body
     assert "sla_minutes" in body
+
+
+def test_pipeline_response_includes_last_schema_and_expected_schema(client):
+    """GET /pipelines/{id} returns last_schema and expected_schema fields (may be None)."""
+    tc, db = client
+    p = _make_pipeline()
+    p.last_schema = None
+    p.expected_schema = None
+    db.get = AsyncMock(return_value=p)
+
+    resp = tc.get(f"/api/v1/pipelines/{p.id}")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "last_schema" in data
+    assert "expected_schema" in data
+    assert data["last_schema"] is None
+    assert data["expected_schema"] is None
+
+
+def test_put_pipeline_sets_expected_schema(client):
+    """PUT /pipelines/{id} accepts expected_schema and returns it on GET."""
+    tc, db = client
+    p = _make_pipeline()
+    p.last_schema = None
+    p.expected_schema = None
+    db.get = AsyncMock(return_value=p)
+    db.commit = AsyncMock()
+    db.refresh = AsyncMock(side_effect=lambda obj: None)
+
+    expected = [{"name": "id", "type": "int64"}, {"name": "val", "type": "string"}]
+    put_resp = tc.put(
+        f"/api/v1/pipelines/{p.id}",
+        json={"expected_schema": expected},
+    )
+    assert put_resp.status_code == 200
+    assert put_resp.json()["expected_schema"] == expected
+
+    p.expected_schema = expected
+    db.get = AsyncMock(return_value=p)
+    get_resp = tc.get(f"/api/v1/pipelines/{p.id}")
+    assert get_resp.json()["expected_schema"] == expected

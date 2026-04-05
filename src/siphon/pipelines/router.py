@@ -49,6 +49,7 @@ class PipelineCreate(BaseModel):
     alert_on: list[Literal["failed", "schema_changed"]] | None = None
     sla_minutes: int | None = None
     partition_by: Literal["none", "ingest_date"] = "none"
+    expected_schema: list[dict] | None = None
 
     @field_validator("incremental_key")
     @classmethod
@@ -69,6 +70,7 @@ class PipelineUpdate(BaseModel):
     alert_on: list[Literal["failed", "schema_changed"]] | None = None
     sla_minutes: int | None = None
     partition_by: Literal["none", "ingest_date"] | None = None
+    expected_schema: list[dict] | None = None
 
     @field_validator("incremental_key")
     @classmethod
@@ -122,6 +124,8 @@ class PipelineResponse(BaseModel):
     alert_on: list[str] | None
     sla_minutes: int | None
     partition_by: str
+    last_schema: list[dict] | None = None
+    expected_schema: list[dict] | None = None
     is_active: bool
     schedule: ScheduleResponse | None
     created_at: datetime
@@ -154,6 +158,8 @@ def _to_response(p: Pipeline, schedule: Schedule | None = None) -> PipelineRespo
         alert_on=p.alert_on,
         sla_minutes=p.sla_minutes,
         partition_by=p.partition_by or "none",
+        last_schema=p.last_schema,
+        expected_schema=p.expected_schema,
         is_active=True,
         schedule=sched,
         created_at=p.created_at,
@@ -266,6 +272,8 @@ async def update_pipeline(
         p.sla_minutes = body.sla_minutes
     if "partition_by" in body.model_fields_set:
         p.partition_by = body.partition_by
+    if "expected_schema" in body.model_fields_set:
+        p.expected_schema = body.expected_schema
     p.updated_at = datetime.now(tz=UTC)
     await db.commit()
     await db.refresh(p)
@@ -438,6 +446,7 @@ async def trigger_pipeline(
         pipeline_id=str(pipeline_id),
         pipeline_schema_hash=p.last_schema_hash,
         pipeline_pii=p.pii_columns or None,
+        pipeline_expected_schema=p.expected_schema or None,
         pipeline_dq={
             "min_rows_expected": p.min_rows_expected,
             "max_rows_drop_pct": p.max_rows_drop_pct,
