@@ -8,7 +8,6 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 import structlog
-
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
@@ -19,14 +18,14 @@ from slowapi.errors import RateLimitExceeded
 from siphon.auth.deps import Principal, get_current_principal
 from siphon.auth.router import limiter
 from siphon.auth.router import router as auth_router
+from siphon.connections.router import router as connections_router
 from siphon.db import get_session_factory
 from siphon.models import ExtractRequest, Job, JobStatus, LogsResponse
+from siphon.pipelines.router import router as pipelines_router
 from siphon.plugins.destinations import get as get_destination
 from siphon.plugins.sources import get as get_source
-from siphon.queue import JobQueue
-from siphon.connections.router import router as connections_router
-from siphon.pipelines.router import router as pipelines_router
 from siphon.preview.router import router as preview_router
+from siphon.queue import JobQueue
 from siphon.runs.router import router as runs_router
 from siphon.users.router import router as users_router
 
@@ -91,9 +90,9 @@ def _configure_otel(app) -> None:
     appears in logs, but no network calls are made.
     """
     from opentelemetry import trace
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, SpanExportResult
-    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
     class _NoOpExporter(SpanExporter):
         def export(self, spans):
