@@ -21,6 +21,7 @@ class BigQueryDestination(Destination):
         credentials_json: str,
         write_mode: str = "append",
         location: str = "US",
+        job_id: str = "",
     ) -> None:
         self.project = project
         self.dataset = dataset
@@ -28,6 +29,7 @@ class BigQueryDestination(Destination):
         self.credentials_json = credentials_json
         self.write_mode = write_mode
         self.location = location
+        # job_id accepted but unused — BigQuery does not use staging paths
 
     def _make_client(self):
         bigquery = importlib.import_module("google.cloud.bigquery")

@@ -22,6 +22,7 @@ class SnowflakeDestination(Destination):
         warehouse: str,
         table: str,
         write_mode: str = "append",
+        job_id: str = "",
     ) -> None:
         self.account = account
         self.user = user
@@ -31,6 +32,7 @@ class SnowflakeDestination(Destination):
         self.warehouse = warehouse
         self.table = table
         self.write_mode = write_mode
+        # job_id accepted but unused — Snowflake does not use staging paths
 
     def write(self, table: pa.Table, is_first_chunk: bool = True) -> int:
         sf = importlib.import_module("snowflake.connector")

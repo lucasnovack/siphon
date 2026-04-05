@@ -137,7 +137,7 @@ async def request_size_limit(request: Request, call_next):
 
 # ── Exception handlers ────────────────────────────────────────────────────────
 _SECRET_FIELD_RE = re.compile(
-    r'("(?:password|secret|secret_key|access_key|connection|token)"\s*:\s*)"[^"]*"',
+    r'("(?:password|secret|secret_key|access_key|connection|token|credentials_json)"\s*:\s*)"[^"]*"',
     re.IGNORECASE,
 )
 
