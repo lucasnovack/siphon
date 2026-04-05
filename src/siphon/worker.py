@@ -5,7 +5,6 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
-import httpx
 import structlog
 from opentelemetry import trace as _otel_trace
 
@@ -142,6 +141,7 @@ def _fire_webhook(url: str, payload: dict) -> None:
     affect the job result or the caller's control flow.
     """
     try:
+        import httpx
         httpx.post(url, json=payload, timeout=5)
     except Exception as exc:
         logger.warning("webhook_post_failed", url=url, error=str(exc))
