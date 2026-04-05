@@ -115,4 +115,8 @@ class JobRun(Base):
     triggered_by: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default="api"
     )
+    source_connection_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("connections.id"), nullable=True
+    )
+    destination_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
