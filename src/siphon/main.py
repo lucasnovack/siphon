@@ -2,9 +2,12 @@
 import logging
 import os
 import re
+import sys
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+
+import structlog
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -27,7 +30,91 @@ from siphon.preview.router import router as preview_router
 from siphon.runs.router import router as runs_router
 from siphon.users.router import router as users_router
 
-logger = logging.getLogger(__name__)
+# ── Observability ─────────────────────────────────────────────────────────────
+
+
+def _otel_trace_processor(_logger, _method, event_dict: dict) -> dict:
+    """Inject OTEL trace_id and span_id into every structlog event."""
+    from opentelemetry import trace
+    span = trace.get_current_span()
+    ctx = span.get_span_context()
+    if ctx.is_valid:
+        event_dict["trace_id"] = format(ctx.trace_id, "032x")
+        event_dict["span_id"] = format(ctx.span_id, "016x")
+    return event_dict
+
+
+def _configure_logging() -> None:
+    """Configure structlog with JSON output (prod) or colored output (dev/TTY).
+
+    All stdlib loggers (uvicorn, SQLAlchemy, APScheduler) are redirected to the
+    same pipeline via ProcessorFormatter so they also emit structured JSON.
+    """
+    shared_processors: list = [
+        structlog.contextvars.merge_contextvars,
+        structlog.stdlib.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        _otel_trace_processor,
+    ]
+    renderer = (
+        structlog.dev.ConsoleRenderer()
+        if sys.stderr.isatty()
+        else structlog.processors.JSONRenderer()
+    )
+    structlog.configure(
+        processors=shared_processors + [structlog.stdlib.ProcessorFormatter.wrap_for_formatter],
+        wrapper_class=structlog.stdlib.BoundLogger,
+        context_class=dict,
+        logger_factory=structlog.stdlib.LoggerFactory(),
+    )
+    formatter = structlog.stdlib.ProcessorFormatter(
+        foreign_pre_chain=shared_processors,
+        processors=[
+            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            renderer,
+        ],
+    )
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(formatter)
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+    logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
+
+
+def _configure_otel(app) -> None:
+    """Set up OpenTelemetry tracing.
+
+    When OTEL_EXPORTER_OTLP_ENDPOINT is set, spans are exported via gRPC OTLP.
+    Otherwise a NullSpanExporter is used — trace_id is still generated and
+    appears in logs, but no network calls are made.
+    """
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, SpanExportResult
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+    class _NoOpExporter(SpanExporter):
+        def export(self, spans):
+            return SpanExportResult.SUCCESS
+
+        def shutdown(self):
+            pass
+
+    provider = TracerProvider()
+    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+    if endpoint:
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint)))
+    else:
+        provider.add_span_processor(BatchSpanProcessor(_NoOpExporter()))
+    trace.set_tracer_provider(provider)
+    FastAPIInstrumentor.instrument_app(app)
+
+
+logger = structlog.get_logger()
+_configure_logging()
 
 # ── Config ────────────────────────────────────────────────────────────────────
 DRAIN_TIMEOUT = int(os.getenv("SIPHON_DRAIN_TIMEOUT", "3600"))
@@ -35,11 +122,11 @@ ENABLE_SYNC_EXTRACT: bool = os.getenv("SIPHON_ENABLE_SYNC_EXTRACT", "false").low
 
 # ── Startup warnings ──────────────────────────────────────────────────────────
 if not os.getenv("SIPHON_API_KEY"):
-    logging.warning("SIPHON_API_KEY not set — API authentication is disabled")
+    logger.warning("SIPHON_API_KEY not set — API authentication is disabled")
 if not os.getenv("SIPHON_ALLOWED_HOSTS"):
-    logging.warning("SIPHON_ALLOWED_HOSTS not set — all hosts are permitted (SSRF risk)")
+    logger.warning("SIPHON_ALLOWED_HOSTS not set — all hosts are permitted (SSRF risk)")
 if not os.getenv("SIPHON_JWT_SECRET"):
-    logging.warning("SIPHON_JWT_SECRET not set — JWT tokens are signed with a dev secret (insecure)")
+    logger.warning("SIPHON_JWT_SECRET not set — JWT tokens are signed with a dev secret (insecure)")
 
 # ── Queue singleton ───────────────────────────────────────────────────────────
 queue: JobQueue = JobQueue()
@@ -78,7 +165,7 @@ async def _create_admin_if_missing() -> None:
         )
         session.add(admin)
         await session.commit()
-        logger.info("Bootstrap admin created: %s", email)
+        logger.info("bootstrap_admin_created", email=email)
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -96,11 +183,9 @@ async def lifespan(app: FastAPI):
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(title="Siphon", lifespan=lifespan)
+_configure_otel(app)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
-# Suppress credential leakage in uvicorn error logs for 422 responses
-logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(auth_router)
@@ -112,6 +197,14 @@ app.include_router(runs_router)
 
 
 # ── Middleware ────────────────────────────────────────────────────────────────
+@app.middleware("http")
+async def _bind_request_id(request: Request, call_next):
+    """Bind a unique request_id to structlog context for log correlation."""
+    structlog.contextvars.clear_contextvars()
+    structlog.contextvars.bind_contextvars(request_id=str(uuid.uuid4()))
+    return await call_next(request)
+
+
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
     """Add standard security headers to all responses."""
@@ -147,8 +240,11 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     body = await request.body()
     redacted = _SECRET_FIELD_RE.sub(r'\1"***"', body.decode(errors="replace"))
     logger.error(
-        "422 on %s %s — body=%s — errors=%s",
-        request.method, request.url.path, redacted, exc.errors()
+        "request_validation_failed",
+        method=request.method,
+        path=request.url.path,
+        body=redacted,
+        errors=exc.errors(),
     )
     safe_errors = [{k: v for k, v in err.items() if k != "input"} for err in exc.errors()]
     return JSONResponse(
