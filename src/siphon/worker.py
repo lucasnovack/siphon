@@ -268,6 +268,7 @@ async def _persist_job_run(job: Job, db_factory) -> None:
     """
     try:
         import uuid
+
         from sqlalchemy import select
 
         from siphon.orm import JobRun

@@ -112,3 +112,43 @@ def test_job_dataclass_has_lineage_fields():
     )
     assert job2.source_connection_id == _CONN_UUID
     assert job2.destination_path == "bronze/table/"
+
+
+def test_run_to_dict_includes_lineage_fields():
+    """_run_to_dict inclui source_connection_id e destination_path."""
+    import uuid
+    from datetime import datetime, UTC
+    from siphon.runs.router import _run_to_dict
+    from siphon.orm import JobRun
+
+    conn_id = uuid.uuid4()
+    run = JobRun(
+        job_id="test-run-dict",
+        status="success",
+        source_connection_id=conn_id,
+        destination_path="bronze/orders/",
+        triggered_by="manual",
+        schema_changed=False,
+        created_at=datetime.now(tz=UTC),
+    )
+    result = _run_to_dict(run)
+    assert result["source_connection_id"] == str(conn_id)
+    assert result["destination_path"] == "bronze/orders/"
+
+
+def test_run_to_dict_null_lineage_for_legacy_runs():
+    """Runs legados (POST /jobs) retornam null nos campos de lineage."""
+    from datetime import datetime, UTC
+    from siphon.runs.router import _run_to_dict
+    from siphon.orm import JobRun
+
+    run = JobRun(
+        job_id="legacy-run",
+        status="success",
+        triggered_by="api",
+        schema_changed=False,
+        created_at=datetime.now(tz=UTC),
+    )
+    result = _run_to_dict(run)
+    assert result["source_connection_id"] is None
+    assert result["destination_path"] is None

@@ -21,6 +21,8 @@ def _run_to_dict(r: JobRun) -> dict:
         "id": r.job_id,
         "job_id": r.job_id,
         "pipeline_id": str(r.pipeline_id) if r.pipeline_id else None,
+        "source_connection_id": str(r.source_connection_id) if r.source_connection_id else None,
+        "destination_path": r.destination_path,
         "status": r.status,
         "triggered_by": r.triggered_by,
         "rows_read": r.rows_read,
