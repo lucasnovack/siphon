@@ -63,6 +63,8 @@ class Pipeline(Base):
     last_watermark: Mapped[str | None] = mapped_column(String(100), nullable=True)
     last_schema_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     pii_columns: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    last_schema: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    expected_schema: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     min_rows_expected: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_rows_drop_pct: Mapped[int | None] = mapped_column(Integer, nullable=True)
     webhook_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
