@@ -270,3 +270,29 @@ def test_put_pipeline_sets_expected_schema(client):
     db.get = AsyncMock(return_value=p)
     get_resp = tc.get(f"/api/v1/pipelines/{p.id}")
     assert get_resp.json()["expected_schema"] == expected
+
+
+def test_create_pipeline_persists_expected_schema(client):
+    """POST /api/v1/pipelines persists expected_schema when provided."""
+    tc, db = client
+    p = _make_pipeline()
+    expected = [{"name": "id", "type": "int64"}]
+    p.expected_schema = expected
+    db.execute = AsyncMock(return_value=MagicMock(
+        scalar_one_or_none=MagicMock(return_value=None)
+    ))
+    db.add = MagicMock()
+    db.commit = AsyncMock()
+    db.refresh = AsyncMock(side_effect=lambda obj: None)
+
+    with patch("siphon.pipelines.router._after_create", return_value=p):
+        resp = tc.post("/api/v1/pipelines", json={
+            "name": "create-expected-schema-test",
+            "source_connection_id": str(p.source_connection_id),
+            "dest_connection_id": str(p.dest_connection_id),
+            "query": "SELECT 1",
+            "destination_path": "s3a://bronze/test/",
+            "expected_schema": expected,
+        })
+    assert resp.status_code == 201
+    assert resp.json()["expected_schema"] == expected

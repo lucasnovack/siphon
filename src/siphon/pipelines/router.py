@@ -222,6 +222,7 @@ async def create_pipeline(
         alert_on=body.alert_on,
         sla_minutes=body.sla_minutes,
         partition_by=body.partition_by,
+        expected_schema=body.expected_schema,
         created_at=now,
         updated_at=now,
     )
