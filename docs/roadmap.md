@@ -7,6 +7,7 @@ Histórico de fases entregues e plano de evolução para tornar o Siphon product
 ## Fases entregues
 
 ### Phase 1 — Skeleton ✅
+
 Scaffolding completo: estrutura de pastas, modelos Pydantic, ABCs de plugins, registry com autodiscovery, resolver de variáveis de data.
 
 ### Phase 2 — API + Queue ✅
@@ -50,49 +51,57 @@ As lacunas abaixo foram levantadas em análise de engenharia de dados (2026-04-0
 
 ---
 
-### Phase 11 — Confiabilidade e Parsers (estimativa: 3–4 semanas)
+### Phase 11 — Confiabilidade e Parsers ✅ (entregue 2026-04-04)
 
-**Motivação:** Gaps que causam perda de dados ou impossibilitam uso real.
+**Branch:** `master` | **Testes:** 352
 
-- **Retry em SQL sources** — exponential backoff com jitter; apenas SFTP tem retry hoje (`sql.py:64` chama `cx.read_sql()` sem nenhuma proteção)
-- **Idempotência / deduplicação** — write S3 e update de watermark não são atômicos; crash entre os dois gera duplicação de dados; implementar staging path ou 2-PC leve
-- **CSV parser** — interface `Parser` existe mas sem implementação; SFTP é inutilizável em produção sem isso
-- **JSON / JSONL parser** — segundo parser mais comum em integrações SFTP/FTP
-- **PII masking básico** — campos marcados como `sensitive: true` na config passam por hash/redact antes de gravar em S3; necessário para LGPD/GDPR
-
----
-
-### Phase 12 — Backfill, Particionamento e Alertas (estimativa: 3 semanas)
-
-**Motivação:** Operação real de pipeline exige reprocessamento e observabilidade mínima.
-
-- **Backfill API** — `POST /api/v1/pipelines/{id}/trigger` com `backfill_from` e `backfill_to`; reprocessa intervalo sem mover watermark global; evita duplicação fora do intervalo
-- **Particionamento Hive-style** — `bronze/orders/_date=2024-04-03/part-0.parquet` em vez de `bronze/orders/part-0.parquet`; reduz drasticamente custo de scan em Athena/BigQuery
-- **Alerting webhook** — configuração de URL de webhook por pipeline; dispara em `failed`, `schema_changed`, `dq_failed`; payload JSON padronizado compatível com Slack e PagerDuty
-- **SLA de freshness** — alerta se pipeline não completou dentro de janela configurada (ex: deve rodar até 06:00)
+- **Retry em SQL sources** ✅ — exponential backoff com jitter
+- **Idempotência / deduplicação** ✅ — staging path (`_staging/{job_id}`) + promote após DB; fix de ordem (promote antes do watermark) entregue na Phase 14 Completion
+- **CSV parser** ✅
+- **JSON / JSONL parser** ✅
+- **PII masking básico** ✅ — sha256 / redact por coluna
 
 ---
 
-### Phase 13 — Novos Conectores (estimativa: 4–5 semanas)
+### Phase 12 — Backfill, Particionamento e Alertas ✅ (entregue 2026-04-04)
 
-**Motivação:** SQL + SFTP cobrem <50% dos casos de uso de um time de dados moderno.
+**Branch:** `master`
 
-- **HTTP/REST source** — extração paginada de APIs (Salesforce, Stripe, Zendesk, custom); suporte a auth Bearer, OAuth2 client_credentials, API key; configuração de rate limiting e cursor de paginação
-- **BigQuery destination** — escrita direta via `google-cloud-bigquery`; append e replace modes; sem necessidade de S3 como intermediário para GCP shops
-- **Snowflake destination** — escrita via `snowflake-connector-python` com COPY INTO; alternativa ao S3 para stacks Snowflake-first
-- **Avro parser** — terceiro formato mais comum em integrações SFTP enterprise (bancos, seguradoras)
+- **Backfill API** ✅
+- **Particionamento Hive-style** ✅
+- **Alerting webhook** ✅
+- **SLA de freshness** ✅
 
 ---
 
-### Phase 14 — Observabilidade e Catálogo (estimativa: 4 semanas)
+### Phase 13 — Novos Conectores ✅ (entregue 2026-04-05)
 
-**Motivação:** Sem observabilidade real é impossível debugar problemas em produção ou responder "de onde veio esse dado?".
+**Branch:** `master` (PR #18 merged) | **Testes:** 368
 
-- **Logging JSON estruturado** — substituir `logging.info("texto")` por JSON com `job_id`, `pipeline_id`, `trace_id`, `duration_ms`; compatível com Datadog/Loki/CloudWatch
-- **OpenTelemetry** — traces distribuídos cobrindo extract → write → DB update; exportador configurável (OTLP, Jaeger, Zipkin)
-- **Schema registry** — armazenar schema Arrow completo (não só SHA-256) por versão; endpoint `GET /api/v1/pipelines/{id}/schema/history`; diff legível entre versões
-- **Data lineage** — registrar `source_connection → pipeline → destination_path` por run; base para responder "onde esse dado foi parar?" e "quem usa essa tabela?"
-- **Column metadata** — descrição, tipo, nullable, flag PII por coluna; integração básica com OpenMetadata ou Collibra
+- **HTTP/REST source** ✅ — auth Bearer/OAuth2/API key, paginação cursor/page/offset, rate limiting
+- **BigQuery destination** ✅ — append e replace modes, service account JSON
+- **Snowflake destination** ✅ — append e replace modes, snowflake-connector-python
+- **Avro parser** ✅ — fastavro
+
+---
+
+### Phase 14 — Observabilidade e Catálogo ✅ parcial (entregue 2026-04-05)
+
+**Branch:** `master` (PR #18 merged) | **Testes:** 368
+
+- **Logging JSON estruturado** ✅ — structlog, stdlib bridge, contextvars por job
+- **OpenTelemetry** ✅ — TracerProvider sempre ativo; trace_id em todos os logs; OTLP via env var
+- **Schema registry** ✅ — Arrow schema como JSONB em `pipelines.last_schema`; exposto em `GET /api/v1/pipelines/{id}`
+- **Data lineage** ✅ — `source_connection_id` + `destination_path` em `job_runs`; exposto em `GET /api/v1/runs` _(entregue na Phase 14 Completion — ver abaixo)_
+- **Column metadata** ⏳ — não iniciado (integração com OpenMetadata/Collibra é BAIXA prioridade)
+
+### Phase 14 Completion — Idempotência + Data Lineage ✅ (2026-04-05)
+
+**Branch:** `feature/phase-14-completion` (PR aberto) | **Testes:** 374
+
+- **Idempotência fix** ✅ — `destination.promote()` agora antes do watermark update; previne gap de dados silencioso
+- **Data lineage mínimo** ✅ — migration 007, `source_connection_id` + `destination_path` em `job_runs`
+- **⚠️ Follow-up pendente:** falha em `promote()` não seta `job.status = "failed"` → watermark ainda avança; rastrear como issue
 
 ---
 
