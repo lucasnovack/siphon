@@ -212,6 +212,16 @@ def _sync_extract_and_write(
             return 0, 0
 
         job.schema_hash = _compute_schema_hash(batches[0].schema)
+
+        # Schema validation (expected_schema DQ check)
+        if job.pipeline_expected_schema:
+            schema_error = _check_schema(batches[0].schema, job.pipeline_expected_schema)
+            if schema_error:
+                raise ValueError(schema_error)
+
+        # Store schema for registry update
+        job._actual_schema = batches[0].schema
+
         rows_read = sum(b.num_rows for b in batches)
 
         dq_error = _check_data_quality(dq, rows_read)
@@ -231,6 +241,13 @@ def _sync_extract_and_write(
     for i, batch in enumerate(source.extract_batches()):
         if i == 0:
             job.schema_hash = _compute_schema_hash(batch.schema)
+            # Schema validation
+            if job.pipeline_expected_schema:
+                schema_error = _check_schema(batch.schema, job.pipeline_expected_schema)
+                if schema_error:
+                    raise ValueError(schema_error)
+            # Store schema for registry
+            job._actual_schema = batch.schema
         rows_read += batch.num_rows
         if job.pipeline_pii:
             batch = _apply_pii_masking(batch, job.pipeline_pii)
@@ -337,6 +354,8 @@ async def _update_pipeline_metadata(job: Job, db_factory) -> None:
             pipeline.last_watermark = datetime.now(tz=UTC).isoformat()
             if job.schema_hash:
                 pipeline.last_schema_hash = job.schema_hash
+            if getattr(job, "_actual_schema", None) is not None:
+                pipeline.last_schema = _schema_to_dict(job._actual_schema)
             pipeline.updated_at = datetime.now(tz=UTC)
             await session.commit()
     except Exception as exc:
