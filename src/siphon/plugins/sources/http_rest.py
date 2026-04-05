@@ -76,6 +76,7 @@ class HTTPRestSource(Source):
 
     def extract_batches(self, chunk_size: int = 100) -> Iterator[pa.Table]:
         headers = self._build_headers()
+        logger.info("Extracting from %s (auth=%s, pagination=%s)", self.url, self.auth_type, self.pagination_type)
         cfg = self.pagination_config
 
         if self.pagination_type == "none":
