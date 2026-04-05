@@ -1,15 +1,15 @@
 # src/siphon/plugins/sources/http_rest.py
-import logging
 import time
 from collections.abc import Iterator
 
 import pyarrow as pa
 import requests
+import structlog
 
 from siphon.plugins.sources import register
 from siphon.plugins.sources.base import Source
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 
 @register("http_rest")

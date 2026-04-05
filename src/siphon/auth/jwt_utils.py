@@ -12,8 +12,8 @@ _JWT_SECRET_DEFAULT = "dev-secret-change-in-production"
 _JWT_SECRET: str = os.getenv("SIPHON_JWT_SECRET", _JWT_SECRET_DEFAULT)
 
 if _JWT_SECRET == _JWT_SECRET_DEFAULT and os.getenv("SIPHON_DEV_MODE", "").lower() != "true":
-    import logging as _logging
-    _logging.getLogger(__name__).critical(
+    import structlog as _structlog
+    _structlog.get_logger().critical(
         "SIPHON_JWT_SECRET is not set — all JWT tokens are signed with a publicly known default "
         "secret and can be forged by anyone. Set SIPHON_JWT_SECRET to a cryptographically random "
         "value before deploying. To suppress this in local dev, set SIPHON_DEV_MODE=true."

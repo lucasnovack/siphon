@@ -79,3 +79,15 @@ def test_pipeline_has_webhook_and_sla_attrs():
     assert p.sla_minutes is None
     assert hasattr(p, "sla_notified_at")
     assert p.sla_notified_at is None
+
+
+def test_pipeline_has_last_schema_and_expected_schema():
+    """Pipeline ORM model has the two new JSONB fields."""
+    from siphon.orm import Pipeline
+
+    cols = {c.key: c for c in Pipeline.__table__.columns}
+    assert "last_schema" in cols
+    assert "expected_schema" in cols
+    # Both are nullable JSONB
+    assert cols["last_schema"].nullable is True
+    assert cols["expected_schema"].nullable is True

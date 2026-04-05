@@ -189,7 +189,9 @@ class Job:
     pipeline_pii: dict | None = None   # {column: "sha256" | "redact"}
     is_backfill: bool = False           # True when triggered with date_from/date_to
     pipeline_alert: dict | None = None  # {webhook_url: str, alert_on: list[str]}
+    pipeline_expected_schema: list[dict] | None = None  # expected Arrow schema for DQ
     schema_hash: str | None = None      # computed during extraction; written to job_runs
+    _actual_schema: object = field(default=None, repr=False)  # transient; not serialized
 
     def to_status(self) -> JobStatus:
         """Convert internal Job to API-facing JobStatus."""

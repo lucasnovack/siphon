@@ -5,12 +5,11 @@ import uuid
 from datetime import UTC, datetime
 from typing import Literal
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, field_validator
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-import logging
 
 from siphon.auth.deps import Principal, get_current_principal
 from siphon.auth.router import limiter
@@ -18,7 +17,7 @@ from siphon.db import get_db
 from siphon.orm import Connection, JobRun, Pipeline, Schedule
 
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 _VALID_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
 
@@ -50,6 +49,7 @@ class PipelineCreate(BaseModel):
     alert_on: list[Literal["failed", "schema_changed"]] | None = None
     sla_minutes: int | None = None
     partition_by: Literal["none", "ingest_date"] = "none"
+    expected_schema: list[dict] | None = None
 
     @field_validator("incremental_key")
     @classmethod
@@ -70,6 +70,7 @@ class PipelineUpdate(BaseModel):
     alert_on: list[Literal["failed", "schema_changed"]] | None = None
     sla_minutes: int | None = None
     partition_by: Literal["none", "ingest_date"] | None = None
+    expected_schema: list[dict] | None = None
 
     @field_validator("incremental_key")
     @classmethod
@@ -94,8 +95,8 @@ class TriggerRequest(BaseModel):
         try:
             from datetime import datetime as _dt
             _dt.fromisoformat(v)
-        except ValueError:
-            raise ValueError("date_from/date_to must be a valid ISO-8601 datetime string")
+        except ValueError as err:
+            raise ValueError("date_from/date_to must be a valid ISO-8601 datetime string") from err
         return v
 
 
@@ -123,6 +124,8 @@ class PipelineResponse(BaseModel):
     alert_on: list[str] | None
     sla_minutes: int | None
     partition_by: str
+    last_schema: list[dict] | None = None
+    expected_schema: list[dict] | None = None
     is_active: bool
     schedule: ScheduleResponse | None
     created_at: datetime
@@ -155,6 +158,8 @@ def _to_response(p: Pipeline, schedule: Schedule | None = None) -> PipelineRespo
         alert_on=p.alert_on,
         sla_minutes=p.sla_minutes,
         partition_by=p.partition_by or "none",
+        last_schema=p.last_schema,
+        expected_schema=p.expected_schema,
         is_active=True,
         schedule=sched,
         created_at=p.created_at,
@@ -217,6 +222,7 @@ async def create_pipeline(
         alert_on=body.alert_on,
         sla_minutes=body.sla_minutes,
         partition_by=body.partition_by,
+        expected_schema=body.expected_schema,
         created_at=now,
         updated_at=now,
     )
@@ -267,6 +273,8 @@ async def update_pipeline(
         p.sla_minutes = body.sla_minutes
     if "partition_by" in body.model_fields_set:
         p.partition_by = body.partition_by
+    if "expected_schema" in body.model_fields_set:
+        p.expected_schema = body.expected_schema
     p.updated_at = datetime.now(tz=UTC)
     await db.commit()
     await db.refresh(p)
@@ -365,7 +373,7 @@ async def delete_schedule(
 async def trigger_pipeline(
     request: Request,
     pipeline_id: uuid.UUID,
-    body: TriggerRequest = TriggerRequest(),
+    body: TriggerRequest = TriggerRequest(),  # noqa: B008
     principal: Principal = Depends(get_current_principal),  # noqa: B008
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ) -> dict:
@@ -439,6 +447,7 @@ async def trigger_pipeline(
         pipeline_id=str(pipeline_id),
         pipeline_schema_hash=p.last_schema_hash,
         pipeline_pii=p.pii_columns or None,
+        pipeline_expected_schema=p.expected_schema or None,
         pipeline_dq={
             "min_rows_expected": p.min_rows_expected,
             "max_rows_drop_pct": p.max_rows_drop_pct,

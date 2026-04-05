@@ -1,16 +1,16 @@
 import datetime
-import logging
 import os
 import uuid
 
 import pyarrow as pa
 import pyarrow.fs as pafs
 import pyarrow.parquet as pq
+import structlog
 
 from siphon.plugins.destinations import register
 from siphon.plugins.destinations.base import Destination
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 _ALLOWED_PREFIX = os.getenv("SIPHON_ALLOWED_S3_PREFIX", "bronze/")
 
