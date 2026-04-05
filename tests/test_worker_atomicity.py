@@ -64,3 +64,5 @@ async def test_promote_called_before_db_writes():
     promote_idx = call_order.index("promote")
     persist_idx = call_order.index("persist_job_run")
     assert promote_idx < persist_idx, f"promote ({promote_idx}) must come before persist ({persist_idx})"
+    update_idx = call_order.index("update_pipeline_metadata")
+    assert promote_idx < update_idx, f"promote ({promote_idx}) must come before update_metadata ({update_idx})"
