@@ -1,21 +1,20 @@
 import base64
 import fnmatch
-import logging
 import os
 import stat
-import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 
 import paramiko
 import pyarrow as pa
+import structlog
 
 from siphon.plugins.parsers import get as get_parser
 from siphon.plugins.sources import register
 from siphon.plugins.sources.base import Source
 from siphon.utils.retry import _with_retry
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 _MAX_FILE_SIZE_MB = int(os.getenv("SIPHON_MAX_FILE_SIZE_MB", "500"))
 _MAX_FILE_SIZE_BYTES = _MAX_FILE_SIZE_MB * 1024 * 1024

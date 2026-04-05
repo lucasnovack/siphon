@@ -4,7 +4,7 @@
 Counters / histograms are module-level singletons.  Import this module wherever
 instrumentation is needed; the registry is shared automatically via prometheus_client.
 """
-from prometheus_client import Counter, Histogram, Gauge
+from prometheus_client import Counter, Gauge, Histogram
 
 jobs_total = Counter(
     "siphon_jobs_total",

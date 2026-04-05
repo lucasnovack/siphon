@@ -1,10 +1,10 @@
 # src/siphon/auth/deps.py
-import logging
 import os
 import uuid
 from typing import Any, Literal
 
 import jwt as pyjwt
+import structlog
 from fastapi import Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
@@ -14,7 +14,7 @@ from siphon.auth.jwt_utils import decode_access_token
 from siphon.db import get_db
 from siphon.orm import User
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 _API_KEY: str | None = os.getenv("SIPHON_API_KEY")
 

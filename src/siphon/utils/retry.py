@@ -1,9 +1,10 @@
-import logging
 import os
 import random
 import time
 
-logger = logging.getLogger(__name__)
+import structlog
+
+logger = structlog.get_logger()
 
 _RETRYABLE_ERRORS = (ConnectionError, TimeoutError, OSError)
 

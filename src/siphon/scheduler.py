@@ -10,12 +10,13 @@ Design decisions:
   each schedule upsert/delete; they gracefully no-op when DATABASE_URL is absent.
 """
 
-import logging
 import os
 import uuid
 from datetime import UTC, datetime, timedelta
 
-logger = logging.getLogger(__name__)
+import structlog
+
+logger = structlog.get_logger()
 
 _scheduler = None  # module-level singleton, started in lifespan
 
@@ -338,19 +339,15 @@ async def _async_trigger_pipeline(pipeline_id_str: str) -> None:
         logger.warning("No DB session factory; cannot trigger pipeline %s", pipeline_id_str)
         return
 
+    import json
     import uuid as uuid_mod
+    from datetime import UTC, date, datetime
 
-    from sqlalchemy import select
-
+    from siphon.crypto import decrypt
     from siphon.models import ExtractRequest, Job
     from siphon.orm import Connection, JobRun, Pipeline
     from siphon.plugins.destinations import get as get_destination
     from siphon.plugins.sources import get as get_source
-
-    import json
-    from datetime import UTC, datetime, date
-
-    from siphon.crypto import decrypt
 
     pipeline_uuid = uuid_mod.UUID(pipeline_id_str)
 

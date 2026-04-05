@@ -2,17 +2,19 @@
 import asyncio
 import hashlib
 import json
-import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 import httpx
+import structlog
+from opentelemetry import trace as _otel_trace
 
 from siphon.models import Job
 from siphon.plugins.destinations.base import Destination
 from siphon.plugins.sources.base import Source
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
+_tracer = _otel_trace.get_tracer("siphon.worker")
 
 try:
     from siphon.metrics import (
@@ -33,6 +35,52 @@ def _compute_schema_hash(schema) -> str:
     """Return a SHA-256 hex digest of the Arrow schema field names + types."""
     fields = [(f.name, str(f.type)) for f in schema]
     return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
+
+
+# ── Schema registry ───────────────────────────────────────────────────────────
+
+
+def _schema_to_dict(schema) -> list[dict]:
+    """Serialize an Arrow schema to a JSON-safe list of field descriptors.
+
+    Format: [{"name": "col", "type": "int64", "nullable": True}, ...]
+    """
+    return [
+        {"name": field.name, "type": str(field.type), "nullable": field.nullable}
+        for field in schema
+    ]
+
+
+def _check_schema(actual, expected: list[dict]) -> str | None:
+    """Validate *actual* Arrow schema against *expected* field descriptors.
+
+    Rules:
+    - Missing column (in expected but not actual): error
+    - Type mismatch: error
+    - Extra column (in actual but not expected): warning log only, no error
+
+    Returns an error message string on failure, None on success.
+    """
+    expected_map = {f["name"]: f["type"] for f in expected}
+    actual_map = {field.name: str(field.type) for field in actual}
+
+    missing = [n for n in expected_map if n not in actual_map]
+    if missing:
+        return f"Schema validation failed: missing columns {missing}"
+
+    mismatched = [
+        f"{n}: expected {expected_map[n]!r}, got {actual_map[n]!r}"
+        for n in expected_map
+        if n in actual_map and actual_map[n] != expected_map[n]
+    ]
+    if mismatched:
+        return f"Schema validation failed: type mismatch [{', '.join(mismatched)}]"
+
+    extra = [n for n in actual_map if n not in expected_map]
+    if extra:
+        logger.warning("extra_columns_not_in_expected_schema", columns=extra)
+
+    return None
 
 
 # ── Data quality ──────────────────────────────────────────────────────────────
@@ -96,7 +144,7 @@ def _fire_webhook(url: str, payload: dict) -> None:
     try:
         httpx.post(url, json=payload, timeout=5)
     except Exception as exc:
-        logger.warning("Webhook POST to %s failed: %s", url, exc)
+        logger.warning("webhook_post_failed", url=url, error=str(exc))
 
 
 def _maybe_fire_webhook(job: "Job") -> None:
@@ -164,6 +212,16 @@ def _sync_extract_and_write(
             return 0, 0
 
         job.schema_hash = _compute_schema_hash(batches[0].schema)
+
+        # Schema validation (expected_schema DQ check)
+        if job.pipeline_expected_schema:
+            schema_error = _check_schema(batches[0].schema, job.pipeline_expected_schema)
+            if schema_error:
+                raise ValueError(schema_error)
+
+        # Store schema for registry update
+        job._actual_schema = batches[0].schema
+
         rows_read = sum(b.num_rows for b in batches)
 
         dq_error = _check_data_quality(dq, rows_read)
@@ -183,6 +241,13 @@ def _sync_extract_and_write(
     for i, batch in enumerate(source.extract_batches()):
         if i == 0:
             job.schema_hash = _compute_schema_hash(batch.schema)
+            # Schema validation
+            if job.pipeline_expected_schema:
+                schema_error = _check_schema(batch.schema, job.pipeline_expected_schema)
+                if schema_error:
+                    raise ValueError(schema_error)
+            # Store schema for registry
+            job._actual_schema = batch.schema
         rows_read += batch.num_rows
         if job.pipeline_pii:
             batch = _apply_pii_masking(batch, job.pipeline_pii)
@@ -252,7 +317,7 @@ async def _persist_job_run(job: Job, db_factory) -> None:
             await session.commit()
 
     except Exception as exc:
-        logger.warning("Failed to persist job_run for %s: %s", job.job_id, exc)
+        logger.warning("persist_job_run_failed", error=str(exc))
 
 
 async def _update_pipeline_metadata(job: Job, db_factory) -> None:
@@ -289,13 +354,13 @@ async def _update_pipeline_metadata(job: Job, db_factory) -> None:
             pipeline.last_watermark = datetime.now(tz=UTC).isoformat()
             if job.schema_hash:
                 pipeline.last_schema_hash = job.schema_hash
+            if getattr(job, "_actual_schema", None) is not None:
+                pipeline.last_schema = _schema_to_dict(job._actual_schema)
             pipeline.updated_at = datetime.now(tz=UTC)
             await session.commit()
     except Exception as exc:
         logger.warning(
-            "Failed to update pipeline metadata for pipeline %s: %s",
-            job.pipeline_id,
-            exc,
+            "update_pipeline_metadata_failed", pipeline_id=job.pipeline_id, error=str(exc)
         )
 
 
@@ -303,6 +368,26 @@ async def _update_pipeline_metadata(job: Job, db_factory) -> None:
 
 
 async def run_job(
+    source: Source,
+    destination: Destination,
+    job: Job,
+    executor: ThreadPoolExecutor,
+    timeout: int,
+    db_factory=None,
+) -> None:
+    structlog.contextvars.clear_contextvars()
+    structlog.contextvars.bind_contextvars(
+        job_id=job.job_id,
+        pipeline_id=job.pipeline_id,
+    )
+    with _tracer.start_as_current_span("siphon.job") as span:
+        span.set_attribute("job_id", job.job_id)
+        if job.pipeline_id:
+            span.set_attribute("pipeline_id", job.pipeline_id)
+        await _run_job_inner(source, destination, job, executor, timeout, db_factory)
+
+
+async def _run_job_inner(
     source: Source,
     destination: Destination,
     job: Job,
@@ -319,7 +404,7 @@ async def run_job(
     loop = asyncio.get_running_loop()
     job.status = "running"
     job.started_at = datetime.now(tz=UTC)
-    logger.info("Job %s started (pipeline=%s)", job.job_id, job.pipeline_id or "none")
+    logger.info("job_started", pipeline=job.pipeline_id or "none")
 
     try:
         rows_read, rows_written = await asyncio.wait_for(
@@ -337,53 +422,50 @@ async def run_job(
                 f"Row count mismatch: {rows_read} rows read but {rows_written} rows written"
             )
             job.logs.append(f"ERROR: {job.error}")
-            logger.error(
-                "Job %s row count mismatch: read=%d written=%d",
-                job.job_id,
-                rows_read,
-                rows_written,
-            )
+            logger.error("job_row_count_mismatch", rows_read=rows_read, rows_written=rows_written)
         elif failed_files:
             job.status = "partial_success"
             job.logs.append(
                 f"Partial success: {rows_read} rows written, {len(failed_files)} files failed"
             )
-            logger.warning(
-                "Job %s partial success: %d files failed", job.job_id, len(failed_files)
-            )
+            logger.warning("job_partial_success", failed_files=len(failed_files))
         else:
             job.status = "success"
             job.logs.append(f"Completed: {rows_read} rows read, {rows_written} rows written")
-            logger.info("Job %s succeeded: %d rows", job.job_id, rows_read)
+            logger.info("job_succeeded", rows=rows_read)
 
         # Schema change detection — log warning; write is never blocked
-        if job.schema_hash and job.pipeline_schema_hash:
-            if job.schema_hash != job.pipeline_schema_hash:
-                msg = (
-                    f"Schema change detected for pipeline {job.pipeline_id}: "
-                    f"old={job.pipeline_schema_hash[:8]}… new={job.schema_hash[:8]}…"
-                )
-                job.logs.append(f"WARNING: {msg}")
-                logger.warning(msg)
+        if job.schema_hash and job.pipeline_schema_hash and job.schema_hash != job.pipeline_schema_hash:
+            msg = (
+                f"Schema change detected for pipeline {job.pipeline_id}: "
+                f"old={job.pipeline_schema_hash[:8]}… new={job.schema_hash[:8]}…"
+            )
+            job.logs.append(f"WARNING: {msg}")
+            logger.warning(
+                "schema_change_detected",
+                pipeline_id=job.pipeline_id,
+                old_hash=job.pipeline_schema_hash[:8],
+                new_hash=job.schema_hash[:8],
+            )
 
     except TimeoutError:
         job.status = "failed"
         job.error = f"Job exceeded timeout of {timeout}s"
         job.logs.append(f"ERROR: {job.error}")
-        logger.error("Job %s timed out after %ss", job.job_id, timeout)
+        logger.error("job_timed_out", timeout_s=timeout)
 
     except ValueError as exc:
         # Data quality violations raise ValueError from _check_data_quality
         job.status = "failed"
         job.error = str(exc)
         job.logs.append(f"ERROR: {job.error}")
-        logger.error("Job %s failed (DQ): %s", job.job_id, exc)
+        logger.error("job_failed_dq", error=str(exc))
 
     except Exception as exc:
         job.status = "failed"
         job.error = str(exc)
         job.logs.append(f"ERROR: {job.error}")
-        logger.error("Job %s failed: %s", job.job_id, exc)
+        logger.error("job_failed", error=str(exc))
 
     finally:
         job.finished_at = datetime.now(tz=UTC)
@@ -403,11 +485,7 @@ async def run_job(
             try:
                 await loop.run_in_executor(executor, destination.promote)
             except Exception as exc:
-                logger.error(
-                    "Failed to promote staging for job %s: %s — data may be in staging path",
-                    job.job_id,
-                    exc,
-                )
+                logger.error("staging_promote_failed", error=str(exc))
         # Fire webhook if configured and event matches
         if job.pipeline_alert:
             _maybe_fire_webhook(job)
