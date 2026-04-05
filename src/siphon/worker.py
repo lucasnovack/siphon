@@ -7,12 +7,14 @@ from datetime import UTC, datetime
 
 import httpx
 import structlog
+from opentelemetry import trace as _otel_trace
 
 from siphon.models import Job
 from siphon.plugins.destinations.base import Destination
 from siphon.plugins.sources.base import Source
 
 logger = structlog.get_logger()
+_tracer = _otel_trace.get_tracer("siphon.worker")
 
 try:
     from siphon.metrics import (
@@ -96,7 +98,7 @@ def _fire_webhook(url: str, payload: dict) -> None:
     try:
         httpx.post(url, json=payload, timeout=5)
     except Exception as exc:
-        logger.warning("Webhook POST to %s failed: %s", url, exc)
+        logger.warning("webhook_post_failed", url=url, error=str(exc))
 
 
 def _maybe_fire_webhook(job: "Job") -> None:
@@ -252,7 +254,7 @@ async def _persist_job_run(job: Job, db_factory) -> None:
             await session.commit()
 
     except Exception as exc:
-        logger.warning("Failed to persist job_run for %s: %s", job.job_id, exc)
+        logger.warning("persist_job_run_failed", error=str(exc))
 
 
 async def _update_pipeline_metadata(job: Job, db_factory) -> None:
@@ -293,9 +295,7 @@ async def _update_pipeline_metadata(job: Job, db_factory) -> None:
             await session.commit()
     except Exception as exc:
         logger.warning(
-            "Failed to update pipeline metadata for pipeline %s: %s",
-            job.pipeline_id,
-            exc,
+            "update_pipeline_metadata_failed", pipeline_id=job.pipeline_id, error=str(exc)
         )
 
 
@@ -303,6 +303,26 @@ async def _update_pipeline_metadata(job: Job, db_factory) -> None:
 
 
 async def run_job(
+    source: Source,
+    destination: Destination,
+    job: Job,
+    executor: ThreadPoolExecutor,
+    timeout: int,
+    db_factory=None,
+) -> None:
+    structlog.contextvars.clear_contextvars()
+    structlog.contextvars.bind_contextvars(
+        job_id=job.job_id,
+        pipeline_id=job.pipeline_id,
+    )
+    with _tracer.start_as_current_span("siphon.job") as span:
+        span.set_attribute("job_id", job.job_id)
+        if job.pipeline_id:
+            span.set_attribute("pipeline_id", job.pipeline_id)
+        await _run_job_inner(source, destination, job, executor, timeout, db_factory)
+
+
+async def _run_job_inner(
     source: Source,
     destination: Destination,
     job: Job,
@@ -319,7 +339,7 @@ async def run_job(
     loop = asyncio.get_running_loop()
     job.status = "running"
     job.started_at = datetime.now(tz=UTC)
-    logger.info("Job %s started (pipeline=%s)", job.job_id, job.pipeline_id or "none")
+    logger.info("job_started", pipeline=job.pipeline_id or "none")
 
     try:
         rows_read, rows_written = await asyncio.wait_for(
@@ -337,53 +357,50 @@ async def run_job(
                 f"Row count mismatch: {rows_read} rows read but {rows_written} rows written"
             )
             job.logs.append(f"ERROR: {job.error}")
-            logger.error(
-                "Job %s row count mismatch: read=%d written=%d",
-                job.job_id,
-                rows_read,
-                rows_written,
-            )
+            logger.error("job_row_count_mismatch", rows_read=rows_read, rows_written=rows_written)
         elif failed_files:
             job.status = "partial_success"
             job.logs.append(
                 f"Partial success: {rows_read} rows written, {len(failed_files)} files failed"
             )
-            logger.warning(
-                "Job %s partial success: %d files failed", job.job_id, len(failed_files)
-            )
+            logger.warning("job_partial_success", failed_files=len(failed_files))
         else:
             job.status = "success"
             job.logs.append(f"Completed: {rows_read} rows read, {rows_written} rows written")
-            logger.info("Job %s succeeded: %d rows", job.job_id, rows_read)
+            logger.info("job_succeeded", rows=rows_read)
 
         # Schema change detection — log warning; write is never blocked
-        if job.schema_hash and job.pipeline_schema_hash:
-            if job.schema_hash != job.pipeline_schema_hash:
-                msg = (
-                    f"Schema change detected for pipeline {job.pipeline_id}: "
-                    f"old={job.pipeline_schema_hash[:8]}… new={job.schema_hash[:8]}…"
-                )
-                job.logs.append(f"WARNING: {msg}")
-                logger.warning(msg)
+        if job.schema_hash and job.pipeline_schema_hash and job.schema_hash != job.pipeline_schema_hash:
+            msg = (
+                f"Schema change detected for pipeline {job.pipeline_id}: "
+                f"old={job.pipeline_schema_hash[:8]}… new={job.schema_hash[:8]}…"
+            )
+            job.logs.append(f"WARNING: {msg}")
+            logger.warning(
+                "schema_change_detected",
+                pipeline_id=job.pipeline_id,
+                old_hash=job.pipeline_schema_hash[:8],
+                new_hash=job.schema_hash[:8],
+            )
 
     except TimeoutError:
         job.status = "failed"
         job.error = f"Job exceeded timeout of {timeout}s"
         job.logs.append(f"ERROR: {job.error}")
-        logger.error("Job %s timed out after %ss", job.job_id, timeout)
+        logger.error("job_timed_out", timeout_s=timeout)
 
     except ValueError as exc:
         # Data quality violations raise ValueError from _check_data_quality
         job.status = "failed"
         job.error = str(exc)
         job.logs.append(f"ERROR: {job.error}")
-        logger.error("Job %s failed (DQ): %s", job.job_id, exc)
+        logger.error("job_failed_dq", error=str(exc))
 
     except Exception as exc:
         job.status = "failed"
         job.error = str(exc)
         job.logs.append(f"ERROR: {job.error}")
-        logger.error("Job %s failed: %s", job.job_id, exc)
+        logger.error("job_failed", error=str(exc))
 
     finally:
         job.finished_at = datetime.now(tz=UTC)
@@ -403,11 +420,7 @@ async def run_job(
             try:
                 await loop.run_in_executor(executor, destination.promote)
             except Exception as exc:
-                logger.error(
-                    "Failed to promote staging for job %s: %s — data may be in staging path",
-                    job.job_id,
-                    exc,
-                )
+                logger.error("staging_promote_failed", error=str(exc))
         # Fire webhook if configured and event matches
         if job.pipeline_alert:
             _maybe_fire_webhook(job)
