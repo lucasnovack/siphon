@@ -267,6 +267,7 @@ async def _persist_job_run(job: Job, db_factory) -> None:
     Errors are logged but never propagated so they cannot mask the real job result.
     """
     try:
+        import uuid
         from sqlalchemy import select
 
         from siphon.orm import JobRun
@@ -297,6 +298,11 @@ async def _persist_job_run(job: Job, db_factory) -> None:
                     run.schema_changed = schema_changed
                     run.started_at = job.started_at
                     run.finished_at = job.finished_at
+                    run.source_connection_id = (
+                        uuid.UUID(job.source_connection_id)
+                        if job.source_connection_id else None
+                    )
+                    run.destination_path = job.destination_path
                     await session.commit()
                     return
 
@@ -311,6 +317,11 @@ async def _persist_job_run(job: Job, db_factory) -> None:
                 schema_changed=schema_changed,
                 started_at=job.started_at,
                 finished_at=job.finished_at,
+                source_connection_id=(
+                    uuid.UUID(job.source_connection_id)
+                    if job.source_connection_id else None
+                ),
+                destination_path=job.destination_path,
                 created_at=datetime.now(tz=UTC),
             )
             session.add(run)

@@ -445,6 +445,8 @@ async def trigger_pipeline(
     job = Job(
         job_id=str(uuid.uuid4()),
         pipeline_id=str(pipeline_id),
+        source_connection_id=str(src_conn.id),
+        destination_path=dest_path,
         pipeline_schema_hash=p.last_schema_hash,
         pipeline_pii=p.pii_columns or None,
         pipeline_expected_schema=p.expected_schema or None,
