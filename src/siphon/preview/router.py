@@ -48,8 +48,8 @@ async def preview_query(
 
     try:
         conn_uuid = uuid.UUID(body.connection_id)
-    except ValueError:
-        raise HTTPException(400, "Invalid connection_id")
+    except ValueError as err:
+        raise HTTPException(400, "Invalid connection_id") from err
 
     conn = await db.get(Connection, conn_uuid)
     if conn is None:
