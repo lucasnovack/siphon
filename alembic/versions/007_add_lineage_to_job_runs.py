@@ -21,7 +21,7 @@ def upgrade() -> None:
     )
     op.add_column(
         "job_runs",
-        sa.Column("destination_path", sa.Text, nullable=True),
+        sa.Column("destination_path", sa.Text(), nullable=True),
     )
 
 
