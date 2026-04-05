@@ -132,6 +132,7 @@ def test_cursor_pagination_follows_next_cursor():
     calls = mock_get.call_args_list
     assert calls[1][1]["params"] == {"after": "abc"}
     assert calls[2][1]["params"] == {"after": "def"}
+    assert mock_get.call_count == 3  # two pages + one empty fetch to detect end
 
 
 def test_page_pagination_increments_page_number():
@@ -201,7 +202,7 @@ def test_rate_limit_calls_sleep_between_pages():
         _make_response({"items": []}),
     ]
     with patch("requests.get", side_effect=responses), \
-         patch("time.sleep") as mock_sleep:
+         patch("siphon.plugins.sources.http_rest.time.sleep") as mock_sleep:
         list(src.extract_batches())
 
     mock_sleep.assert_called_once_with(0.5)
