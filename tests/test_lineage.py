@@ -67,6 +67,38 @@ async def test_lineage_fields_persisted_to_job_run():
     assert run_obj.destination_path == "bronze/orders/"
 
 
+@pytest.mark.asyncio
+async def test_lineage_fields_persisted_to_job_run_update_path():
+    """source_connection_id and destination_path are set on the existing run row (UPDATE path)."""
+    from siphon.worker import _persist_job_run
+
+    job = Job(
+        job_id="test-lineage-update",
+        status="success",
+        run_id=42,
+        source_connection_id=_CONN_UUID,
+        destination_path="bronze/events/",
+    )
+
+    import uuid as _uuid
+    mock_run = MagicMock()
+    mock_run.id = 42
+
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_run
+
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock(return_value=mock_result)
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+    mock_factory = MagicMock(return_value=mock_session)
+
+    await _persist_job_run(job, mock_factory)
+
+    assert mock_run.source_connection_id == _uuid.UUID(_CONN_UUID)
+    assert mock_run.destination_path == "bronze/events/"
+
+
 def test_job_dataclass_has_lineage_fields():
     """Job dataclass tem os campos de lineage com default None."""
     job = Job(job_id="test")
