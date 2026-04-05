@@ -111,6 +111,24 @@ class BigQueryDestinationConfig(BaseModel):
         )
 
 
+class SnowflakeDestinationConfig(BaseModel):
+    type: Literal["snowflake"]
+    account: str
+    user: str
+    password: str
+    database: str
+    schema: str
+    warehouse: str
+    table: str
+    write_mode: Literal["append", "replace"] = "append"
+
+    def __repr__(self) -> str:
+        return (
+            f"SnowflakeDestinationConfig(account={self.account!r}, "
+            f"database={self.database!r}, table={self.table!r})"
+        )
+
+
 # ── Request / response models ─────────────────────────────────────────────────
 
 SourceConfig = Annotated[
@@ -119,7 +137,7 @@ SourceConfig = Annotated[
 ]
 
 DestinationConfig = Annotated[
-    S3ParquetDestinationConfig | BigQueryDestinationConfig,
+    S3ParquetDestinationConfig | BigQueryDestinationConfig | SnowflakeDestinationConfig,
     Field(discriminator="type"),
 ]
 
