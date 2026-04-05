@@ -1,14 +1,14 @@
 # src/siphon/plugins/destinations/bigquery_dest.py
 import importlib
 import json
-import logging
 
 import pyarrow as pa
+import structlog
 
 from siphon.plugins.destinations import register
 from siphon.plugins.destinations.base import Destination
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 
 @register("bigquery")

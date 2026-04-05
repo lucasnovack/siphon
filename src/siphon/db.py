@@ -1,11 +1,11 @@
 # src/siphon/db.py
-import logging
 import os
 from collections.abc import AsyncGenerator
 
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 _DATABASE_URL: str | None = os.getenv("DATABASE_URL")
 

@@ -1,5 +1,4 @@
 import ipaddress
-import logging
 import os
 from collections.abc import Iterator
 from datetime import datetime
@@ -7,6 +6,7 @@ from urllib.parse import parse_qs, urlparse, urlunparse
 
 import connectorx as cx
 import pyarrow as pa
+import structlog
 
 from siphon import variables
 from siphon.models import mask_uri
@@ -14,7 +14,7 @@ from siphon.plugins.sources import register
 from siphon.plugins.sources.base import Source
 from siphon.utils.retry import _with_retry
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 _CONNECT_TIMEOUT = int(os.getenv("SIPHON_CONNECT_TIMEOUT", "30"))
 _ALLOWED_HOSTS = os.getenv("SIPHON_ALLOWED_HOSTS", "")

@@ -5,12 +5,11 @@ import uuid
 from datetime import UTC, datetime
 from typing import Literal
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, field_validator
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-import logging
 
 from siphon.auth.deps import Principal, get_current_principal
 from siphon.auth.router import limiter
@@ -18,7 +17,7 @@ from siphon.db import get_db
 from siphon.orm import Connection, JobRun, Pipeline, Schedule
 
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 _VALID_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
 
