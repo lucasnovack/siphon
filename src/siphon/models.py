@@ -62,6 +62,19 @@ class SFTPSourceConfig(BaseModel):
         )
 
 
+class HTTPRestSourceConfig(BaseModel):
+    type: Literal["http_rest"]
+    url: str
+    auth_type: Literal["none", "bearer", "api_key", "oauth2_client_credentials"] = "none"
+    auth_config: dict = Field(default_factory=dict)
+    results_key: str | None = None
+    pagination_type: Literal["none", "cursor", "page", "offset"] = "none"
+    pagination_config: dict = Field(default_factory=dict)
+    rate_limit_seconds: float = 0.0
+    max_pages: int = 100
+    headers: dict = Field(default_factory=dict)
+
+
 # ── Destination configs ───────────────────────────────────────────────────────
 
 
@@ -82,20 +95,56 @@ class S3ParquetDestinationConfig(BaseModel):
         )
 
 
+class BigQueryDestinationConfig(BaseModel):
+    type: Literal["bigquery"]
+    project: str
+    dataset: str
+    table: str
+    credentials_json: str  # full service account JSON as a string
+    write_mode: Literal["append", "replace"] = "append"
+    location: str = "US"
+
+    def __repr__(self) -> str:
+        return (
+            f"BigQueryDestinationConfig(project={self.project!r}, "
+            f"dataset={self.dataset!r}, table={self.table!r})"
+        )
+
+
+class SnowflakeDestinationConfig(BaseModel):
+    type: Literal["snowflake"]
+    account: str
+    user: str
+    password: str
+    database: str
+    schema: str
+    warehouse: str
+    table: str
+    write_mode: Literal["append", "replace"] = "append"
+
+    def __repr__(self) -> str:
+        return (
+            f"SnowflakeDestinationConfig(account={self.account!r}, "
+            f"database={self.database!r}, table={self.table!r})"
+        )
+
+
 # ── Request / response models ─────────────────────────────────────────────────
 
 SourceConfig = Annotated[
-    SQLSourceConfig | SFTPSourceConfig,
+    SQLSourceConfig | SFTPSourceConfig | HTTPRestSourceConfig,
     Field(discriminator="type"),
 ]
 
-# DestinationConfig: single member for now — add more types as plugins are added.
-# Pydantic v2 discriminator requires 2+ members in a union, so we type directly.
+DestinationConfig = Annotated[
+    S3ParquetDestinationConfig | BigQueryDestinationConfig | SnowflakeDestinationConfig,
+    Field(discriminator="type"),
+]
 
 
 class ExtractRequest(BaseModel):
     source: SourceConfig
-    destination: S3ParquetDestinationConfig
+    destination: DestinationConfig
 
 
 class JobStatus(BaseModel):
