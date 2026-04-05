@@ -62,6 +62,19 @@ class SFTPSourceConfig(BaseModel):
         )
 
 
+class HTTPRestSourceConfig(BaseModel):
+    type: Literal["http_rest"]
+    url: str
+    auth_type: Literal["none", "bearer", "api_key", "oauth2_client_credentials"] = "none"
+    auth_config: dict = Field(default_factory=dict)
+    results_key: str | None = None
+    pagination_type: Literal["none", "cursor", "page", "offset"] = "none"
+    pagination_config: dict = Field(default_factory=dict)
+    rate_limit_seconds: float = 0.0
+    max_pages: int = 100
+    headers: dict = Field(default_factory=dict)
+
+
 # ── Destination configs ───────────────────────────────────────────────────────
 
 
@@ -85,7 +98,7 @@ class S3ParquetDestinationConfig(BaseModel):
 # ── Request / response models ─────────────────────────────────────────────────
 
 SourceConfig = Annotated[
-    SQLSourceConfig | SFTPSourceConfig,
+    SQLSourceConfig | SFTPSourceConfig | HTTPRestSourceConfig,
     Field(discriminator="type"),
 ]
 
