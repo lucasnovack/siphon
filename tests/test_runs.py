@@ -77,7 +77,9 @@ def test_list_runs_returns_runs(client):
 
 def test_get_run_logs_returns_404_when_run_missing(client):
     tc, db = client
-    db.get = AsyncMock(return_value=None)
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = None
+    db.execute = AsyncMock(return_value=result_mock)
     resp = tc.get("/api/v1/runs/999/logs")
     assert resp.status_code == 404
 
@@ -132,7 +134,9 @@ def test_cancel_run_requires_admin(client):
 def test_cancel_queued_run(client):
     tc, db = client
     run = _make_run(status="queued")
-    db.get = AsyncMock(return_value=run)
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = run
+    db.execute = AsyncMock(return_value=result_mock)
     db.commit = AsyncMock()
 
     from siphon.models import Job
@@ -152,6 +156,8 @@ def test_cancel_queued_run(client):
 def test_cancel_already_finished_returns_409(client):
     tc, db = client
     run = _make_run(status="success")
-    db.get = AsyncMock(return_value=run)
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = run
+    db.execute = AsyncMock(return_value=result_mock)
     resp = tc.post(f"/api/v1/runs/{run.id}/cancel")
     assert resp.status_code == 409
