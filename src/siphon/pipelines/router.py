@@ -95,8 +95,8 @@ class TriggerRequest(BaseModel):
         try:
             from datetime import datetime as _dt
             _dt.fromisoformat(v)
-        except ValueError:
-            raise ValueError("date_from/date_to must be a valid ISO-8601 datetime string")
+        except ValueError as err:
+            raise ValueError("date_from/date_to must be a valid ISO-8601 datetime string") from err
         return v
 
 
@@ -372,7 +372,7 @@ async def delete_schedule(
 async def trigger_pipeline(
     request: Request,
     pipeline_id: uuid.UUID,
-    body: TriggerRequest = TriggerRequest(),
+    body: TriggerRequest = TriggerRequest(),  # noqa: B008
     principal: Principal = Depends(get_current_principal),  # noqa: B008
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ) -> dict:
