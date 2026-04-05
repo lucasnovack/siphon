@@ -27,13 +27,16 @@ def test_otel_processor_injects_trace_id_when_span_active():
 def test_otel_processor_noop_when_no_active_span():
     """_otel_trace_processor leaves event dict unchanged when no valid span is active."""
     from siphon.main import _otel_trace_processor
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry import trace
+    from unittest.mock import MagicMock, patch
 
-    # Ensure no span is active
-    trace.set_tracer_provider(TracerProvider())
+    mock_span = MagicMock()
+    mock_ctx = MagicMock()
+    mock_ctx.is_valid = False  # no active span
+    mock_span.get_span_context.return_value = mock_ctx
+
     event_dict = {"event": "hello"}
-    result = _otel_trace_processor(None, None, event_dict)
+    with patch("opentelemetry.trace.get_current_span", return_value=mock_span):
+        result = _otel_trace_processor(None, None, event_dict)
 
     assert "trace_id" not in result
     assert "span_id" not in result
