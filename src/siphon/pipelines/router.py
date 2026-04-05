@@ -445,6 +445,8 @@ async def trigger_pipeline(
     job = Job(
         job_id=str(uuid.uuid4()),
         pipeline_id=str(pipeline_id),
+        source_connection_id=str(src_conn.id),
+        destination_path=dest_path,
         pipeline_schema_hash=p.last_schema_hash,
         pipeline_pii=p.pii_columns or None,
         pipeline_expected_schema=p.expected_schema or None,
@@ -476,6 +478,8 @@ async def trigger_pipeline(
         pipeline_id=pipeline_id,
         status="queued",
         triggered_by="backfill" if job.is_backfill else "manual",
+        source_connection_id=src_conn.id,
+        destination_path=dest_path,
         created_at=now,
     )
     db.add(run)

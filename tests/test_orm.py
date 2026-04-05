@@ -34,7 +34,9 @@ def test_job_run_columns():
     cols = {c.name for c in JobRun.__table__.columns}
     assert {"id", "job_id", "pipeline_id", "schedule_id", "status", "rows_read",
             "rows_written", "duration_ms", "error", "schema_changed",
-            "started_at", "finished_at", "created_at"}.issubset(cols)
+            "started_at", "finished_at", "triggered_by",
+            "source_connection_id", "destination_path",
+            "created_at"}.issubset(cols)
 
 
 def test_base_metadata_has_all_tables():

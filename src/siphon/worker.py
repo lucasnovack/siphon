@@ -267,6 +267,8 @@ async def _persist_job_run(job: Job, db_factory) -> None:
     Errors are logged but never propagated so they cannot mask the real job result.
     """
     try:
+        import uuid
+
         from sqlalchemy import select
 
         from siphon.orm import JobRun
@@ -297,6 +299,11 @@ async def _persist_job_run(job: Job, db_factory) -> None:
                     run.schema_changed = schema_changed
                     run.started_at = job.started_at
                     run.finished_at = job.finished_at
+                    run.source_connection_id = (
+                        uuid.UUID(job.source_connection_id)
+                        if job.source_connection_id else None
+                    )
+                    run.destination_path = job.destination_path
                     await session.commit()
                     return
 
@@ -311,6 +318,11 @@ async def _persist_job_run(job: Job, db_factory) -> None:
                 schema_changed=schema_changed,
                 started_at=job.started_at,
                 finished_at=job.finished_at,
+                source_connection_id=(
+                    uuid.UUID(job.source_connection_id)
+                    if job.source_connection_id else None
+                ),
+                destination_path=job.destination_path,
                 created_at=datetime.now(tz=UTC),
             )
             session.add(run)
@@ -477,15 +489,19 @@ async def _run_job_inner(
                 rows_extracted_total.inc(job.rows_written)
             if job.schema_hash and job.pipeline_schema_hash and job.schema_hash != job.pipeline_schema_hash:
                 schema_changes_total.inc()
-        if db_factory is not None:
-            await _persist_job_run(job, db_factory)
-            await _update_pipeline_metadata(job, db_factory)
-        # Promote staging to final path after DB commit (idempotent writes)
+        # Promote staging BEFORE DB writes so that if the pod dies after promote
+        # but before the watermark update, the next run re-extracts (at-most-twice
+        # for incremental; idempotent for full_refresh). The previous order
+        # (promote after DB) risked advancing the watermark while data sat in
+        # staging and got cleaned up on restart — a silent data gap.
         if job.status in ("success", "partial_success") and hasattr(destination, "promote"):
             try:
                 await loop.run_in_executor(executor, destination.promote)
             except Exception as exc:
                 logger.error("staging_promote_failed", error=str(exc))
+        if db_factory is not None:
+            await _persist_job_run(job, db_factory)
+            await _update_pipeline_metadata(job, db_factory)
         # Fire webhook if configured and event matches
         if job.pipeline_alert:
             _maybe_fire_webhook(job)
