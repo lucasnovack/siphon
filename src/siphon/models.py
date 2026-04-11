@@ -95,40 +95,6 @@ class S3ParquetDestinationConfig(BaseModel):
         )
 
 
-class BigQueryDestinationConfig(BaseModel):
-    type: Literal["bigquery"]
-    project: str
-    dataset: str
-    table: str
-    credentials_json: str  # full service account JSON as a string
-    write_mode: Literal["append", "replace"] = "append"
-    location: str = "US"
-
-    def __repr__(self) -> str:
-        return (
-            f"BigQueryDestinationConfig(project={self.project!r}, "
-            f"dataset={self.dataset!r}, table={self.table!r})"
-        )
-
-
-class SnowflakeDestinationConfig(BaseModel):
-    type: Literal["snowflake"]
-    account: str
-    user: str
-    password: str
-    database: str
-    schema: str
-    warehouse: str
-    table: str
-    write_mode: Literal["append", "replace"] = "append"
-
-    def __repr__(self) -> str:
-        return (
-            f"SnowflakeDestinationConfig(account={self.account!r}, "
-            f"database={self.database!r}, table={self.table!r})"
-        )
-
-
 # ── Request / response models ─────────────────────────────────────────────────
 
 SourceConfig = Annotated[
@@ -136,10 +102,7 @@ SourceConfig = Annotated[
     Field(discriminator="type"),
 ]
 
-DestinationConfig = Annotated[
-    S3ParquetDestinationConfig | BigQueryDestinationConfig | SnowflakeDestinationConfig,
-    Field(discriminator="type"),
-]
+DestinationConfig = S3ParquetDestinationConfig
 
 
 class ExtractRequest(BaseModel):
