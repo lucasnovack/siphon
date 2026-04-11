@@ -445,12 +445,11 @@ def test_fire_webhook_posts_json():
     """_fire_webhook sends a POST with the expected payload."""
     from unittest.mock import patch, MagicMock
 
-    with patch("siphon.worker.httpx") as mock_httpx:
-        mock_httpx.post = MagicMock()
+    with patch("httpx.post") as mock_post:
         payload = {"event": "failed", "pipeline_id": "abc", "job_id": "j1"}
         _fire_webhook("https://hooks.example.com/test", payload)
 
-    mock_httpx.post.assert_called_once_with(
+    mock_post.assert_called_once_with(
         "https://hooks.example.com/test",
         json=payload,
         timeout=5,
@@ -461,8 +460,7 @@ def test_fire_webhook_silences_errors():
     """_fire_webhook never raises — network failures are logged and swallowed."""
     from unittest.mock import patch
 
-    with patch("siphon.worker.httpx") as mock_httpx:
-        mock_httpx.post.side_effect = Exception("network down")
+    with patch("httpx.post", side_effect=Exception("network down")):
         _fire_webhook("https://hooks.example.com/test", {"event": "failed"})
     # No exception raised
 
