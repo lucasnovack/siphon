@@ -41,9 +41,14 @@ def _make_pipeline():
     p.alert_on = None
     p.sla_minutes = None
     p.partition_by = "none"
+    p.priority = "normal"
     p.created_at = datetime.now(tz=UTC)
     p.updated_at = datetime.now(tz=UTC)
     return p
+
+
+def _make_pipeline_row():
+    return _make_pipeline()
 
 
 @pytest.fixture()
@@ -296,3 +301,44 @@ def test_create_pipeline_persists_expected_schema(client):
         })
     assert resp.status_code == 201
     assert resp.json()["expected_schema"] == expected
+
+
+def test_pipeline_create_accepts_priority(client):
+    """PipelineCreate must accept a priority field and persist it."""
+    tc, db = client
+
+    src_conn = MagicMock()
+    src_conn.id = uuid.uuid4()
+    src_conn.conn_type = "sql"
+    src_conn.max_concurrent_jobs = 2
+
+    dest_conn = MagicMock()
+    dest_conn.id = uuid.uuid4()
+
+    db.get = AsyncMock(side_effect=lambda model, id_: src_conn if model.__name__ == "Connection" else dest_conn)
+    db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
+    db.add = MagicMock()
+    db.commit = AsyncMock()
+    db.refresh = AsyncMock()
+
+    resp = tc.post("/api/v1/pipelines", json={
+        "name": "test-priority",
+        "source_connection_id": str(src_conn.id),
+        "query": "SELECT 1",
+        "destination_path": "s3://bucket/path",
+        "priority": "high",
+    })
+    assert resp.status_code == 201
+
+
+def test_pipeline_response_includes_priority(client):
+    """PipelineResponse must include priority field."""
+    tc, db = client
+    row = _make_pipeline_row()
+    row.priority = "high"
+    db.execute = AsyncMock(return_value=MagicMock(
+        scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[row])))
+    ))
+    resp = tc.get("/api/v1/pipelines")
+    assert resp.status_code == 200
+    assert resp.json()[0]["priority"] == "high"
