@@ -44,6 +44,7 @@ class Connection(Base):
     conn_type: Mapped[str] = mapped_column(String(20), nullable=False)
     encrypted_config: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     key_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    max_concurrent_jobs: Mapped[int] = mapped_column(Integer, nullable=False, default=2, server_default="2")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

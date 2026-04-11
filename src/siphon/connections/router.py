@@ -28,11 +28,13 @@ class ConnectionCreate(BaseModel):
     name: str
     type: ConnType
     config: dict[str, Any]
+    max_concurrent_jobs: int = 2
 
 
 class ConnectionUpdate(BaseModel):
     name: str | None = None
     config: dict[str, Any] | None = None
+    max_concurrent_jobs: int | None = None
 
 
 class ConnectionTestRequest(BaseModel):
@@ -45,6 +47,7 @@ class ConnectionResponse(BaseModel):
     name: str
     type: str
     key_version: int
+    max_concurrent_jobs: int
     created_at: datetime
     updated_at: datetime
     # config intentionally absent — never returned to callers
@@ -56,6 +59,7 @@ def _to_response(conn: Connection) -> ConnectionResponse:
         name=conn.name,
         type=conn.conn_type,
         key_version=conn.key_version,
+        max_concurrent_jobs=conn.max_concurrent_jobs,
         created_at=conn.created_at,
         updated_at=conn.updated_at,
     )
@@ -95,6 +99,7 @@ async def create_connection(
         conn_type=body.type,
         encrypted_config=encrypt(json.dumps(body.config)),
         key_version=1,
+        max_concurrent_jobs=body.max_concurrent_jobs,
         created_at=now,
         updated_at=now,
     )
@@ -159,6 +164,8 @@ async def update_connection(
     if body.config is not None:
         conn.encrypted_config = encrypt(json.dumps(body.config))
         conn.key_version += 1
+    if body.max_concurrent_jobs is not None:
+        conn.max_concurrent_jobs = body.max_concurrent_jobs
     conn.updated_at = datetime.now(tz=UTC)
     await db.commit()
     await db.refresh(conn)
