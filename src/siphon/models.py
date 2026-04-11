@@ -135,6 +135,7 @@ class Job:
     """Internal job state. Never stores connection strings, passwords, or keys."""
 
     job_id: str
+    priority: str = "normal"   # "low" | "normal" | "high"
     status: str = "queued"
     created_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
     started_at: datetime | None = None

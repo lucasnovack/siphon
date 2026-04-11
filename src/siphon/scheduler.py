@@ -405,6 +405,7 @@ async def _async_trigger_pipeline(pipeline_id_str: str) -> None:
                 "max_rows_drop_pct": p.max_rows_drop_pct,
                 "prev_rows": None,
             } if has_dq else None,
+            priority=p.priority,
         )
 
         now = datetime.now(tz=UTC)

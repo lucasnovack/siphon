@@ -72,6 +72,7 @@ class Pipeline(Base):
     alert_on: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     sla_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     partition_by: Mapped[str] = mapped_column(String(20), nullable=False, server_default="none")
+    priority: Mapped[str] = mapped_column(String(10), nullable=False, server_default="normal")
     sla_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     dest_connection_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("connections.id"), nullable=True
