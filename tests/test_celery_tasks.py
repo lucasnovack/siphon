@@ -63,6 +63,28 @@ def test_job_dict_roundtrip():
     assert restored.run_id == 42
 
 
+def test_job_dict_roundtrip_with_datetimes():
+    """_job_to_dict/_job_from_dict must correctly round-trip datetime fields."""
+    from datetime import UTC, datetime
+    from siphon.models import Job
+    from siphon.tasks import _job_to_dict, _job_from_dict
+
+    job = Job(
+        job_id="dt-test",
+        priority="normal",
+        pipeline_id="pipe-dt",
+        created_at=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+        started_at=datetime(2024, 1, 15, 10, 30, 5, tzinfo=UTC),
+    )
+    d = _job_to_dict(job)
+    assert isinstance(d["started_at"], str), "started_at should be ISO string in dict"
+    assert isinstance(d["created_at"], str), "created_at should be ISO string in dict"
+
+    restored = _job_from_dict(d)
+    assert restored.started_at == job.started_at
+    assert restored.created_at == job.created_at
+
+
 def test_run_pipeline_task_is_registered():
     """run_pipeline_task must be registered in the Celery app."""
     from siphon.celery_app import app
