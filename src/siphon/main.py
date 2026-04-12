@@ -178,6 +178,8 @@ async def lifespan(app: FastAPI):
     from siphon.scheduler import stop_scheduler
     stop_scheduler()
     await queue.drain(timeout=DRAIN_TIMEOUT)
+    from siphon.plugins.sources.http_rest import _session as _http_session
+    _http_session.close()
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
