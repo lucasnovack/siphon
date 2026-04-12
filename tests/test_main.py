@@ -7,7 +7,9 @@ API requests with those types pass validation and route to working stubs.
 Queue is now Celery-backed; submit() is patched to avoid needing a real broker.
 """
 
-from unittest.mock import MagicMock, patch
+import uuid
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pyarrow as pa
 import pytest
@@ -138,8 +140,55 @@ def test_post_extract_disabled_by_default(client):
 
 
 def test_get_job_404_for_unknown(client):
-    response = client.get("/jobs/nonexistent-id")
-    assert response.status_code == 404
+    # Use main_module.get_db — the function bound in the app's routes at import time.
+    # (siphon.db may have been reloaded by test_db.py, giving a different get_db object.)
+    db_mock = AsyncMock()
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = None
+    db_mock.execute = AsyncMock(return_value=result_mock)
+
+    async def _override_db():
+        yield db_mock
+
+    app.dependency_overrides[main_module.get_db] = _override_db
+    try:
+        response = client.get("/jobs/nonexistent-id")
+        assert response.status_code == 404
+    finally:
+        del app.dependency_overrides[main_module.get_db]
+
+
+def test_get_job_by_job_id_reads_from_db(client):
+    """GET /jobs/{id} must read from job_runs table, not in-memory queue."""
+    run = MagicMock()
+    run.job_id = str(uuid.uuid4())
+    run.status = "success"
+    run.rows_read = 42
+    run.rows_written = 40
+    run.started_at = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+    run.finished_at = datetime(2026, 1, 1, 0, 0, 5, tzinfo=UTC)
+    run.error = None
+
+    db_mock = AsyncMock()
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = run
+    db_mock.execute = AsyncMock(return_value=result_mock)
+
+    async def _override_db():
+        yield db_mock
+
+    app.dependency_overrides[main_module.get_db] = _override_db
+    try:
+        response = client.get(f"/jobs/{run.job_id}")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["job_id"] == run.job_id
+        assert body["status"] == "success"
+        assert body["rows_read"] == 42
+        assert body["rows_written"] == 40
+        assert body["duration_ms"] == 5000
+    finally:
+        del app.dependency_overrides[main_module.get_db]
 
 
 # ── GET /jobs/{id}/logs ───────────────────────────────────────────────────────
