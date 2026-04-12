@@ -417,6 +417,8 @@ async def _async_trigger_pipeline(pipeline_id_str: str) -> None:
             status="queued",
             triggered_by="schedule",
             created_at=now,
+            source_connection_id=src_conn.id,
+            destination_path=dest_path,
         )
         session.add(run)
         await session.commit()
