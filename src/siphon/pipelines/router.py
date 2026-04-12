@@ -497,7 +497,7 @@ async def trigger_pipeline(
     job.run_id = run.id  # worker will UPDATE this row on completion
 
     q = _get_queue()
-    await q.submit(job, source, destination)
+    await q.submit(job, source, destination, max_concurrent=src_conn.max_concurrent_jobs)
 
     return {"job_id": job.job_id, "status": job.status, "run_id": run.id}
 
