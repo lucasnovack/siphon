@@ -406,6 +406,8 @@ async def _async_trigger_pipeline(pipeline_id_str: str) -> None:
                 "prev_rows": None,
             } if has_dq else None,
             priority=p.priority,
+            source_connection_id=str(src_conn.id),
+            destination_path=dest_path,
         )
 
         now = datetime.now(tz=UTC)
