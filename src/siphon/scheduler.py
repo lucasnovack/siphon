@@ -432,5 +432,5 @@ async def _async_trigger_pipeline(pipeline_id_str: str) -> None:
     destination = dest_cls(**req.destination.model_dump(exclude={"type"}))
 
     from siphon.main import queue
-    await queue.submit(job, source, destination)
+    await queue.submit(job, source, destination, max_concurrent=src_conn.max_concurrent_jobs)
     logger.info("Scheduled trigger queued: pipeline=%s job=%s", pipeline_id_str, job.job_id)
