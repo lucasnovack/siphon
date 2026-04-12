@@ -14,7 +14,7 @@ def q():
 
 
 async def test_submit_dispatches_to_celery(q):
-    """submit() must call run_pipeline_task.apply_async with the correct queue."""
+    """submit() must call run_pipeline_task.apply_async with the correct queue and task_id."""
     job = Job(job_id="j-normal", priority="normal")
     with patch("siphon.queue.run_pipeline_task") as mock_task:
         mock_task.apply_async = MagicMock()
@@ -22,6 +22,7 @@ async def test_submit_dispatches_to_celery(q):
     mock_task.apply_async.assert_called_once()
     _, kwargs = mock_task.apply_async.call_args
     assert kwargs["queue"] == "normal"
+    assert kwargs.get("task_id") == "j-normal"
 
 
 async def test_submit_uses_high_queue_for_high_priority(q):

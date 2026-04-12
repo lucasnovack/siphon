@@ -110,3 +110,4 @@ def test_celery_queue_submit_calls_apply_async():
 
     assert len(applied) == 1
     assert applied[0]["queue"] == "high"
+    assert applied[0].get("task_id") == "j-1"
