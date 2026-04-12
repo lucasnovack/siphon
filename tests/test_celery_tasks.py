@@ -39,3 +39,31 @@ def test_celery_app_default_queue_is_normal():
 def test_celery_app_retries_on_startup():
     from siphon.celery_app import app
     assert app.conf.broker_connection_retry_on_startup is True
+
+
+def test_job_dict_roundtrip():
+    """Job can be serialized to dict and reconstructed for Celery transport."""
+    from siphon.models import Job
+    from siphon.tasks import _job_to_dict, _job_from_dict
+
+    job = Job(
+        job_id="test-123",
+        priority="high",
+        pipeline_id="pipe-uuid",
+        run_id=42,
+    )
+    d = _job_to_dict(job)
+    assert isinstance(d, dict)
+    assert d["job_id"] == "test-123"
+    assert d["priority"] == "high"
+
+    restored = _job_from_dict(d)
+    assert restored.job_id == "test-123"
+    assert restored.priority == "high"
+    assert restored.run_id == 42
+
+
+def test_run_pipeline_task_is_registered():
+    """run_pipeline_task must be registered in the Celery app."""
+    from siphon.celery_app import app
+    assert "siphon.tasks.run_pipeline_task" in app.tasks
