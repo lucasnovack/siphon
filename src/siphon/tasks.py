@@ -42,6 +42,9 @@ def _job_from_dict(d: dict) -> Job:
 )
 def run_pipeline_task(self, job_dict: dict, source_dict: dict, destination_dict: dict) -> None:
     """Celery task: reconstruct Job + plugins, call run_job(), persist result."""
+    # NOTE: asyncio.new_event_loop() is used here because Celery tasks are synchronous.
+    # This is only compatible with Celery's prefork (default) worker pool.
+    # Do NOT run with gevent or eventlet pools — they monkey-patch asyncio and will deadlock.
     from siphon.plugins.destinations import get as get_destination
     from siphon.plugins.sources import get as get_source
 
@@ -58,7 +61,7 @@ def run_pipeline_task(self, job_dict: dict, source_dict: dict, destination_dict:
         dest_cls = get_destination(dest_type)
     except ValueError as exc:
         logger.error("Unknown plugin type", error=str(exc))
-        return
+        raise  # permanent failure — don't retry an invalid plugin type
 
     source = source_cls(**source_dict)
     destination = dest_cls(**destination_dict, job_id=job.job_id)
