@@ -5,6 +5,7 @@ GET  /api/v1/runs              — paginated list of all job_runs
 GET  /api/v1/runs/{id}/logs    — cursor-based in-memory logs for a running job
 POST /api/v1/runs/{id}/cancel  — request cancellation of a queued/running job
 """
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +14,7 @@ from siphon.auth.deps import Principal, get_current_principal
 from siphon.db import get_db
 from siphon.orm import JobRun
 
+logger = structlog.get_logger()
 router = APIRouter(prefix="/api/v1/runs", tags=["runs"])
 
 
@@ -120,8 +122,11 @@ async def cancel_run(
         raise HTTPException(409, f"Cannot cancel job in status '{run.status}'")
 
     # Revoke the Celery task (best-effort; no-op if task already completed)
-    from siphon.celery_app import app as celery_app
-    celery_app.control.revoke(run.job_id, terminate=True, signal="SIGTERM")
+    try:
+        from siphon.celery_app import app as celery_app
+        celery_app.control.revoke(run.job_id, terminate=True, signal="SIGTERM")
+    except Exception:
+        logger.warning("celery_revoke_failed", run_id=run_id)
 
     run.status = "failed"
     run.error = "Cancelled by user"

@@ -55,6 +55,7 @@ class JobQueue:
             run_pipeline_task.apply_async(
                 args=[_job_to_dict(job), source_config, destination_config],
                 queue=queue_name,
+                task_id=job.job_id,
             )
         except Exception as exc:
             logger.error("Failed to enqueue job via Celery", job_id=job.job_id, error=str(exc))
