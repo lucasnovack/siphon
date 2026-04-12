@@ -1,6 +1,5 @@
 # tests/test_celery_tasks.py
 """Tests for Celery app configuration and task serialization."""
-import pytest
 
 
 def test_celery_app_has_three_queues():
@@ -44,7 +43,7 @@ def test_celery_app_retries_on_startup():
 def test_job_dict_roundtrip():
     """Job can be serialized to dict and reconstructed for Celery transport."""
     from siphon.models import Job
-    from siphon.tasks import _job_to_dict, _job_from_dict
+    from siphon.tasks import _job_from_dict, _job_to_dict
 
     job = Job(
         job_id="test-123",
@@ -66,8 +65,9 @@ def test_job_dict_roundtrip():
 def test_job_dict_roundtrip_with_datetimes():
     """_job_to_dict/_job_from_dict must correctly round-trip datetime fields."""
     from datetime import UTC, datetime
+
     from siphon.models import Job
-    from siphon.tasks import _job_to_dict, _job_from_dict
+    from siphon.tasks import _job_from_dict, _job_to_dict
 
     job = Job(
         job_id="dt-test",
@@ -89,3 +89,24 @@ def test_run_pipeline_task_is_registered():
     """run_pipeline_task must be registered in the Celery app."""
     from siphon.celery_app import app
     assert "siphon.tasks.run_pipeline_task" in app.tasks
+
+
+def test_celery_queue_submit_calls_apply_async():
+    """JobQueue.submit() must call run_pipeline_task.apply_async() with correct queue."""
+    import asyncio
+    from unittest.mock import MagicMock, patch
+
+    from siphon.models import Job
+    from siphon.queue import JobQueue
+
+    applied = []
+
+    with patch("siphon.queue.run_pipeline_task") as mock_task:
+        mock_task.apply_async = MagicMock(side_effect=lambda *a, **kw: applied.append(kw))
+        q = JobQueue()
+        asyncio.get_event_loop().run_until_complete(
+            q.submit(Job(job_id="j-1", priority="high"), {}, {})
+        )
+
+    assert len(applied) == 1
+    assert applied[0]["queue"] == "high"
