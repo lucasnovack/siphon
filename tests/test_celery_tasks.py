@@ -29,3 +29,13 @@ def test_celery_app_prefetch_one():
     """worker_prefetch_multiplier=1 means one task at a time per worker."""
     from siphon.celery_app import app
     assert app.conf.worker_prefetch_multiplier == 1
+
+
+def test_celery_app_default_queue_is_normal():
+    from siphon.celery_app import app
+    assert app.conf.task_default_queue == "normal"
+
+
+def test_celery_app_retries_on_startup():
+    from siphon.celery_app import app
+    assert app.conf.broker_connection_retry_on_startup is True
