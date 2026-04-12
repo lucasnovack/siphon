@@ -51,6 +51,35 @@ def run_pipeline_task(self, job_dict: dict, source_dict: dict, destination_dict:
     job = _job_from_dict(job_dict)
     structlog.contextvars.bind_contextvars(job_id=job.job_id, pipeline_id=job.pipeline_id)
 
+    # Update job status to "running" in DB
+    import asyncio as _asyncio
+
+    from sqlalchemy import select
+
+    from siphon.db import get_session_factory
+    from siphon.orm import JobRun
+
+    async def _mark_running():
+        db_factory = get_session_factory()
+        async with db_factory() as session:
+            result = await session.execute(
+                select(JobRun).where(JobRun.job_id == job.job_id).order_by(JobRun.id.desc()).limit(1)
+            )
+            run = result.scalar_one_or_none()
+            if run and run.status == "queued":
+                from datetime import UTC, datetime
+                run.status = "running"
+                run.started_at = datetime.now(UTC)
+                await session.commit()
+
+    _mark_running_loop = _asyncio.new_event_loop()
+    try:
+        _mark_running_loop.run_until_complete(_mark_running())
+    except Exception:
+        pass  # best-effort — don't fail the task if status update fails
+    finally:
+        _mark_running_loop.close()
+
     source_dict = dict(source_dict)
     destination_dict = dict(destination_dict)
     source_type = source_dict.pop("type", None)
@@ -65,8 +94,6 @@ def run_pipeline_task(self, job_dict: dict, source_dict: dict, destination_dict:
 
     source = source_cls(**source_dict)
     destination = dest_cls(**destination_dict, job_id=job.job_id)
-
-    from siphon.db import get_session_factory
 
     loop = asyncio.new_event_loop()
     try:

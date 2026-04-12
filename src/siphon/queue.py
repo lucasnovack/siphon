@@ -46,6 +46,9 @@ class JobQueue:
         job: Job,
         source_config: dict,
         destination_config: dict,
+        # max_concurrent is accepted for API compatibility with callers that set
+        # per-connection limits. Celery's worker concurrency (--concurrency flag)
+        # now controls actual parallelism; this parameter has no effect.
         max_concurrent: int = 2,
     ) -> None:
         """Dispatch a job to the Celery queue matching job.priority."""
