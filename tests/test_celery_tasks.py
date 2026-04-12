@@ -24,6 +24,12 @@ def test_celery_app_acks_late():
     assert app.conf.task_acks_late is True
 
 
+def test_celery_app_rejects_on_worker_lost():
+    """task_reject_on_worker_lost=True ensures tasks re-queue on worker crash."""
+    from siphon.celery_app import app
+    assert app.conf.task_reject_on_worker_lost is True
+
+
 def test_celery_app_prefetch_one():
     """worker_prefetch_multiplier=1 means one task at a time per worker."""
     from siphon.celery_app import app
