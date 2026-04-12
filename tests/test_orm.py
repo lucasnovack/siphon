@@ -15,7 +15,7 @@ def test_refresh_token_columns():
 
 def test_connection_columns():
     cols = {c.name for c in Connection.__table__.columns}
-    assert cols == {"id", "name", "conn_type", "encrypted_config", "key_version", "created_at", "updated_at"}
+    assert cols == {"id", "name", "conn_type", "encrypted_config", "key_version", "max_concurrent_jobs", "created_at", "updated_at"}
 
 
 def test_pipeline_columns():

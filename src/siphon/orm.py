@@ -44,6 +44,7 @@ class Connection(Base):
     conn_type: Mapped[str] = mapped_column(String(20), nullable=False)
     encrypted_config: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     key_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    max_concurrent_jobs: Mapped[int] = mapped_column(Integer, nullable=False, default=2, server_default="2")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -71,6 +72,7 @@ class Pipeline(Base):
     alert_on: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     sla_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     partition_by: Mapped[str] = mapped_column(String(20), nullable=False, server_default="none")
+    priority: Mapped[str] = mapped_column(String(10), nullable=False, server_default="normal")
     sla_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     dest_connection_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("connections.id"), nullable=True

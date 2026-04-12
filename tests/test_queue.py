@@ -197,3 +197,85 @@ async def test_evict_expired_keeps_running_jobs():
     q._evict_expired()
 
     assert q.get_job("j-running") is running_job
+
+
+async def test_high_priority_job_dispatched_before_low():
+    """High-priority job must be dispatched before a low-priority job when both are queued."""
+    dispatch_order = []
+    gate = threading.Event()
+
+    class _RecordingSource(Source):
+        def __init__(self, name):
+            self.name = name
+        def extract(self) -> pa.Table:
+            dispatch_order.append(self.name)
+            gate.wait(timeout=5)
+            return pa.table({"x": [1]})
+
+    q = JobQueue(max_workers=1, max_queue=5, job_timeout=10)
+    q.start()
+    try:
+        # Fill the one worker slot with a blocking job
+        blocker = Job(job_id="j-blocker", priority="normal")
+        await q.submit(blocker, _RecordingSource("blocker"), _NopDest())
+        await asyncio.sleep(0.15)  # let blocker start
+
+        # Enqueue low then high — high must come out first
+        low_job = Job(job_id="j-low", priority="low")
+        high_job = Job(job_id="j-high", priority="high")
+        await q.submit(low_job, _RecordingSource("low"), _NopDest())
+        await q.submit(high_job, _RecordingSource("high"), _NopDest())
+
+        gate.set()  # release blocker + both queued jobs
+        for _ in range(80):
+            await asyncio.sleep(0.1)
+            if high_job.status not in ("queued", "running") and low_job.status not in ("queued", "running"):
+                break
+
+        # blocker first (already running), then high before low
+        assert dispatch_order[1] == "high", f"Expected 'high' second, got {dispatch_order}"
+        assert dispatch_order[2] == "low", f"Expected 'low' third, got {dispatch_order}"
+    finally:
+        gate.set()
+        if q._executor:
+            q._executor.shutdown(wait=False)
+
+
+async def test_concurrency_limit_per_connection():
+    """Jobs sharing a source_connection_id must respect max_concurrent limit."""
+    active_count = []
+    conn_id = "conn-abc"
+
+    class _CountingSource(Source):
+        def extract(self) -> pa.Table:
+            active_count.append(1)
+            import time
+            time.sleep(0.2)  # simulate work
+            active_count.append(-1)
+            return pa.table({"x": [1]})
+
+    q = JobQueue(max_workers=4, max_queue=10, job_timeout=10)
+    q.start()
+    try:
+        jobs = []
+        for i in range(4):
+            job = Job(job_id=f"j-{i}", priority="normal")
+            job.source_connection_id = conn_id
+            await q.submit(job, _CountingSource(), _NopDest(), max_concurrent=2)
+            jobs.append(job)
+
+        for _ in range(60):
+            await asyncio.sleep(0.1)
+            if all(j.status not in ("queued", "running") for j in jobs):
+                break
+
+        # Max concurrent active for this connection must never exceed 2
+        peak = 0
+        running = 0
+        for delta in active_count:
+            running += delta
+            peak = max(peak, running)
+        assert peak <= 2, f"Peak concurrency was {peak}, expected <= 2"
+    finally:
+        if q._executor:
+            q._executor.shutdown(wait=False)

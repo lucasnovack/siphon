@@ -14,11 +14,13 @@ from siphon.plugins.sources.base import Source
 
 logger = structlog.get_logger()
 
+_PRIORITY = {"high": 0, "normal": 1, "low": 2}
+
 
 class JobQueue:
-    """In-memory async job queue backed by a ThreadPoolExecutor.
+    """Async job queue with priority ordering and per-connection concurrency limits.
 
-    - submit()     → dispatch immediately if capacity available; HTTP 429 if full
+    - submit()     → enqueue job; raises 429 if full, 503 if draining
     - drain()      → stop accepting new jobs; wait for active jobs to finish
     - get_job()    → retrieve job state by ID
     - is_full      → True when (active + queued) >= (max_workers + max_queue)
@@ -42,11 +44,26 @@ class JobQueue:
         self._queued: int = 0
         self._total: int = 0
         self._draining: bool = False
+        # Priority queue items: (priority_int, counter, job_id)
+        self._pqueue: asyncio.PriorityQueue = asyncio.PriorityQueue()
+        # Maps job_id → (job, source, destination, max_concurrent)
+        self._pending: dict[str, tuple[Job, Source, Destination, int]] = {}
+        # Active job count per source_connection_id
+        self._active_by_connection: dict[str, int] = {}
+        self._pqueue_counter: int = 0
+        self._loops_started: bool = False
 
     def start(self) -> None:
-        """Start the thread pool. Call once at service startup."""
+        """Start the thread pool. Call once at service startup (or on lifespan restart)."""
         self._executor = ThreadPoolExecutor(max_workers=self._max_workers)
-        asyncio.ensure_future(self._evict_loop())
+        # Reset state so that _ensure_loops_started() will re-schedule background tasks
+        # on the current event loop (important when lifespan is restarted in tests).
+        self._draining = False
+        self._loops_started = False
+        self._pqueue = asyncio.PriorityQueue()
+        self._pending = {}
+        self._active_by_connection = {}
+        self._pqueue_counter = 0
         logger.info(
             "JobQueue started: max_workers=%d, max_queue=%d, job_ttl=%ds",
             self._max_workers,
@@ -54,19 +71,23 @@ class JobQueue:
             self._job_ttl,
         )
 
+    def _ensure_loops_started(self) -> None:
+        """Start background coroutines on the running event loop (called from async context)."""
+        if not self._loops_started:
+            self._loops_started = True
+            asyncio.ensure_future(self._evict_loop())
+            asyncio.ensure_future(self._dispatcher_loop())
+
     @property
     def is_full(self) -> bool:
-        """True when no more jobs can be accepted (active + queued at capacity)."""
         return (self._active + self._queued) >= (self._max_workers + self._max_queue)
 
     @property
     def is_draining(self) -> bool:
-        """True after drain() has been called — no new jobs accepted."""
         return self._draining
 
     @property
     def stats(self) -> dict:
-        """Queue statistics for /health endpoint."""
         return {
             "workers_active": self._active,
             "workers_max": self._max_workers,
@@ -75,11 +96,9 @@ class JobQueue:
         }
 
     def get_job(self, job_id: str) -> Job | None:
-        """Retrieve job state by ID. Returns None if not found."""
         return self._jobs.get(job_id)
 
     def _evict_expired(self) -> None:
-        """Remove terminal jobs whose finished_at is older than job_ttl. Called by _evict_loop."""
         now = datetime.now(tz=UTC)
         terminal = ("success", "failed", "partial_success")
         to_remove = [
@@ -95,18 +114,61 @@ class JobQueue:
             logger.debug("Evicted %d expired job(s) from memory", len(to_remove))
 
     async def _evict_loop(self) -> None:
-        """Background coroutine: evict expired jobs every 5 minutes until draining."""
         while not self._draining:
             await asyncio.sleep(300)
             self._evict_expired()
 
-    async def submit(self, job: Job, source: Source, destination: Destination) -> None:
-        """Submit a job for execution.
+    async def _dispatcher_loop(self) -> None:
+        """Pull jobs from the priority queue and dispatch when capacity is available."""
+        while not self._draining:
+            if self._active >= self._max_workers:
+                await asyncio.sleep(0.05)
+                continue
+
+            try:
+                priority, counter, job_id = self._pqueue.get_nowait()
+            except asyncio.QueueEmpty:
+                await asyncio.sleep(0.05)
+                continue
+
+            entry = self._pending.pop(job_id, None)
+            if entry is None:
+                # Job was cancelled or already dispatched
+                continue
+
+            job, source, destination, max_concurrent = entry
+            conn_id = job.source_connection_id
+
+            # Check per-connection concurrency limit
+            if conn_id and self._active_by_connection.get(conn_id, 0) >= max_concurrent:
+                # Requeue with same priority and counter (preserves relative order)
+                await self._pqueue.put((priority, counter, job_id))
+                self._pending[job_id] = entry
+                await asyncio.sleep(0.1)
+                continue
+
+            self._queued -= 1
+            self._active += 1
+            if conn_id:
+                self._active_by_connection[conn_id] = (
+                    self._active_by_connection.get(conn_id, 0) + 1
+                )
+            asyncio.ensure_future(self._dispatch(job, source, destination, conn_id))
+
+    async def submit(
+        self,
+        job: Job,
+        source: Source,
+        destination: Destination,
+        max_concurrent: int = 2,
+    ) -> None:
+        """Enqueue a job for execution.
 
         Raises:
             HTTPException(503): service is draining (shutting down)
             HTTPException(429): queue is at capacity
         """
+        self._ensure_loops_started()
         if self._draining:
             raise HTTPException(status_code=503, detail="Service is shutting down")
         if self.is_full:
@@ -117,30 +179,43 @@ class JobQueue:
                     f"queued: {self._queued}. Retry later."
                 ),
             )
+        priority_int = _PRIORITY.get(job.priority, 1)
+        counter = self._pqueue_counter
+        self._pqueue_counter += 1
+
         self._jobs[job.job_id] = job
+        self._pending[job.job_id] = (job, source, destination, max_concurrent)
         self._total += 1
         self._queued += 1
-        asyncio.ensure_future(self._dispatch(job, source, destination))
+
+        await self._pqueue.put((priority_int, counter, job.job_id))
         logger.debug(
-            "Job %s submitted (active=%d, queued=%d)", job.job_id, self._active, self._queued
+            "Job %s enqueued (priority=%s, active=%d, queued=%d)",
+            job.job_id, job.priority, self._active, self._queued,
         )
 
-    async def _dispatch(self, job: Job, source: Source, destination: Destination) -> None:
-        """Internal: moves job from queued to active, runs it, then decrements active."""
-        self._queued -= 1
-        self._active += 1
+    async def _dispatch(
+        self,
+        job: Job,
+        source: Source,
+        destination: Destination,
+        conn_id: str | None,
+    ) -> None:
         try:
             from siphon.db import get_session_factory
-            await worker.run_job(source, destination, job, self._executor, self._job_timeout, db_factory=get_session_factory())
+            await worker.run_job(
+                source, destination, job, self._executor, self._job_timeout,
+                db_factory=get_session_factory(),
+            )
         finally:
             self._active -= 1
+            if conn_id:
+                self._active_by_connection[conn_id] = max(
+                    0, self._active_by_connection.get(conn_id, 1) - 1
+                )
 
     async def drain(self, timeout: float) -> None:
-        """Stop accepting new jobs and wait for active jobs to finish.
-
-        If timeout elapses before all jobs complete, remaining running jobs are
-        marked as failed with status "Service shutdown before job completed".
-        """
+        """Stop accepting new jobs and wait for active jobs to finish."""
         self._draining = True
         logger.info("Draining queue (timeout=%.1fs, active=%d)", timeout, self._active)
 
@@ -150,7 +225,6 @@ class JobQueue:
         while self._active > 0:
             remaining = deadline - loop.time()
             if remaining <= 0:
-                # Timeout — mark all still-running jobs as failed
                 aborted = 0
                 for j in self._jobs.values():
                     if j.status in ("queued", "running"):
