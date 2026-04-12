@@ -11,6 +11,8 @@ from siphon.plugins.sources.base import Source
 
 logger = structlog.get_logger()
 
+_session = requests.Session()
+
 
 @register("http_rest")
 class HTTPRestSource(Source):
@@ -48,7 +50,7 @@ class HTTPRestSource(Source):
         return headers
 
     def _fetch_oauth2_token(self) -> str:
-        resp = requests.post(
+        resp = _session.post(
             self.auth_config["token_url"],
             data={
                 "grant_type": "client_credentials",
@@ -80,7 +82,7 @@ class HTTPRestSource(Source):
         cfg = self.pagination_config
 
         if self.pagination_type == "none":
-            resp = requests.get(self.url, headers=headers, timeout=30)
+            resp = _session.get(self.url, headers=headers, timeout=30)
             resp.raise_for_status()
             records = self._extract_records(resp.json())
             if records:
@@ -92,7 +94,7 @@ class HTTPRestSource(Source):
             next_key = cfg.get("next_key", "next_cursor")
             params: dict = {}
             for _ in range(self.max_pages):
-                resp = requests.get(self.url, headers=headers, params=params, timeout=30)
+                resp = _session.get(self.url, headers=headers, params=params, timeout=30)
                 resp.raise_for_status()
                 data = resp.json()
                 records = self._extract_records(data)
@@ -112,7 +114,7 @@ class HTTPRestSource(Source):
             page_size = cfg.get("page_size", 100)
             for page_num in range(1, self.max_pages + 1):
                 params = {page_param: page_num, page_size_param: page_size}
-                resp = requests.get(self.url, headers=headers, params=params, timeout=30)
+                resp = _session.get(self.url, headers=headers, params=params, timeout=30)
                 resp.raise_for_status()
                 records = self._extract_records(resp.json())
                 if not records:
@@ -128,7 +130,7 @@ class HTTPRestSource(Source):
             offset = 0
             for _ in range(self.max_pages):
                 params = {offset_param: offset, page_size_param: page_size}
-                resp = requests.get(self.url, headers=headers, params=params, timeout=30)
+                resp = _session.get(self.url, headers=headers, params=params, timeout=30)
                 resp.raise_for_status()
                 records = self._extract_records(resp.json())
                 if not records:

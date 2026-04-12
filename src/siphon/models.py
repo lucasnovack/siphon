@@ -95,40 +95,6 @@ class S3ParquetDestinationConfig(BaseModel):
         )
 
 
-class BigQueryDestinationConfig(BaseModel):
-    type: Literal["bigquery"]
-    project: str
-    dataset: str
-    table: str
-    credentials_json: str  # full service account JSON as a string
-    write_mode: Literal["append", "replace"] = "append"
-    location: str = "US"
-
-    def __repr__(self) -> str:
-        return (
-            f"BigQueryDestinationConfig(project={self.project!r}, "
-            f"dataset={self.dataset!r}, table={self.table!r})"
-        )
-
-
-class SnowflakeDestinationConfig(BaseModel):
-    type: Literal["snowflake"]
-    account: str
-    user: str
-    password: str
-    database: str
-    schema: str
-    warehouse: str
-    table: str
-    write_mode: Literal["append", "replace"] = "append"
-
-    def __repr__(self) -> str:
-        return (
-            f"SnowflakeDestinationConfig(account={self.account!r}, "
-            f"database={self.database!r}, table={self.table!r})"
-        )
-
-
 # ── Request / response models ─────────────────────────────────────────────────
 
 SourceConfig = Annotated[
@@ -136,10 +102,7 @@ SourceConfig = Annotated[
     Field(discriminator="type"),
 ]
 
-DestinationConfig = Annotated[
-    S3ParquetDestinationConfig | BigQueryDestinationConfig | SnowflakeDestinationConfig,
-    Field(discriminator="type"),
-]
+DestinationConfig = S3ParquetDestinationConfig
 
 
 class ExtractRequest(BaseModel):
@@ -172,6 +135,7 @@ class Job:
     """Internal job state. Never stores connection strings, passwords, or keys."""
 
     job_id: str
+    priority: str = "normal"   # "low" | "normal" | "high"
     status: str = "queued"
     created_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
     started_at: datetime | None = None
@@ -192,7 +156,7 @@ class Job:
     pipeline_expected_schema: list[dict] | None = None  # expected Arrow schema for DQ
     schema_hash: str | None = None      # computed during extraction; written to job_runs
     source_connection_id: str | None = None   # UUID string; populated by trigger_pipeline
-    destination_path: str | None = None        # resolved S3/BQ/Snowflake path
+    destination_path: str | None = None        # resolved S3 path
     _actual_schema: object = field(default=None, repr=False)  # transient; not serialized
 
     def to_status(self) -> JobStatus:

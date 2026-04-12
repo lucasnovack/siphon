@@ -29,6 +29,7 @@ def _make_conn_row(name="prod-mysql"):
     row.conn_type = "sql"
     row.encrypted_config = b"encrypted"
     row.key_version = 1
+    row.max_concurrent_jobs = 2
     row.created_at = datetime.now(tz=UTC)
     row.updated_at = datetime.now(tz=UTC)
     return row
@@ -162,6 +163,19 @@ def test_delete_connection_returns_204(client):
     db.commit = AsyncMock()
     resp = tc.delete(f"/api/v1/connections/{row.id}")
     assert resp.status_code == 204
+
+
+def test_connection_response_includes_max_concurrent_jobs(client):
+    """ConnectionResponse must expose max_concurrent_jobs."""
+    tc, db = client
+    row = _make_conn_row()
+    row.max_concurrent_jobs = 3
+    db.execute = AsyncMock(return_value=MagicMock(
+        scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[row])))
+    ))
+    resp = tc.get("/api/v1/connections")
+    assert resp.status_code == 200
+    assert resp.json()[0]["max_concurrent_jobs"] == 3
 
 
 def test_create_connection_requires_admin(monkeypatch):

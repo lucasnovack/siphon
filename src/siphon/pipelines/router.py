@@ -50,6 +50,7 @@ class PipelineCreate(BaseModel):
     sla_minutes: int | None = None
     partition_by: Literal["none", "ingest_date"] = "none"
     expected_schema: list[dict] | None = None
+    priority: Literal["low", "normal", "high"] = "normal"
 
     @field_validator("incremental_key")
     @classmethod
@@ -71,6 +72,7 @@ class PipelineUpdate(BaseModel):
     sla_minutes: int | None = None
     partition_by: Literal["none", "ingest_date"] | None = None
     expected_schema: list[dict] | None = None
+    priority: Literal["low", "normal", "high"] | None = None
 
     @field_validator("incremental_key")
     @classmethod
@@ -124,6 +126,7 @@ class PipelineResponse(BaseModel):
     alert_on: list[str] | None
     sla_minutes: int | None
     partition_by: str
+    priority: str
     last_schema: list[dict] | None = None
     expected_schema: list[dict] | None = None
     is_active: bool
@@ -158,6 +161,7 @@ def _to_response(p: Pipeline, schedule: Schedule | None = None) -> PipelineRespo
         alert_on=p.alert_on,
         sla_minutes=p.sla_minutes,
         partition_by=p.partition_by or "none",
+        priority=p.priority,
         last_schema=p.last_schema,
         expected_schema=p.expected_schema,
         is_active=True,
@@ -223,6 +227,7 @@ async def create_pipeline(
         sla_minutes=body.sla_minutes,
         partition_by=body.partition_by,
         expected_schema=body.expected_schema,
+        priority=body.priority,
         created_at=now,
         updated_at=now,
     )
@@ -275,6 +280,8 @@ async def update_pipeline(
         p.partition_by = body.partition_by
     if "expected_schema" in body.model_fields_set:
         p.expected_schema = body.expected_schema
+    if body.priority is not None:
+        p.priority = body.priority
     p.updated_at = datetime.now(tz=UTC)
     await db.commit()
     await db.refresh(p)
@@ -460,6 +467,7 @@ async def trigger_pipeline(
             {"webhook_url": p.webhook_url, "alert_on": p.alert_on or ["failed"]}
             if p.webhook_url else None
         ),
+        priority=p.priority,
     )
 
     try:
@@ -489,7 +497,7 @@ async def trigger_pipeline(
     job.run_id = run.id  # worker will UPDATE this row on completion
 
     q = _get_queue()
-    await q.submit(job, source, destination)
+    await q.submit(job, source, destination, max_concurrent=src_conn.max_concurrent_jobs)
 
     return {"job_id": job.job_id, "status": job.status, "run_id": run.id}
 
