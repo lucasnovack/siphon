@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,13 +28,13 @@ class ConnectionCreate(BaseModel):
     name: str
     type: ConnType
     config: dict[str, Any]
-    max_concurrent_jobs: int = 2
+    max_concurrent_jobs: int = Field(default=2, ge=1)
 
 
 class ConnectionUpdate(BaseModel):
     name: str | None = None
     config: dict[str, Any] | None = None
-    max_concurrent_jobs: int | None = None
+    max_concurrent_jobs: int | None = Field(default=None, ge=1)
 
 
 class ConnectionTestRequest(BaseModel):
