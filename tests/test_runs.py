@@ -139,18 +139,15 @@ def test_cancel_queued_run(client):
     db.execute = AsyncMock(return_value=result_mock)
     db.commit = AsyncMock()
 
-    from siphon.models import Job
-    job = MagicMock(spec=Job)
-    job.status = "queued"
-    job.logs = []
-
     from unittest.mock import patch
-    with patch("siphon.main.queue") as mock_queue:
-        mock_queue.get_job.return_value = job
+    with patch("siphon.celery_app.app") as mock_celery:
+        mock_celery.control.revoke = MagicMock()
         resp = tc.post(f"/api/v1/runs/{run.id}/cancel")
 
     assert resp.status_code == 202
-    assert job.status == "failed"
+    assert resp.json()["status"] == "cancelled"
+    assert run.status == "failed"
+    assert run.error == "Cancelled by user"
 
 
 def test_cancel_already_finished_returns_409(client):
