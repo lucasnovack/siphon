@@ -4,10 +4,12 @@ HTTP integration tests for the FastAPI app.
 
 Strategy: register fake "sql" and "s3_parquet" plugins at module level so that
 API requests with those types pass validation and route to working stubs.
-Queue state is reset between tests via the `reset_queue` fixture.
+Queue is now Celery-backed; submit() is patched to avoid needing a real broker.
 """
 
-from unittest.mock import patch
+import uuid
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pyarrow as pa
 import pytest
@@ -73,26 +75,16 @@ VALID_REQUEST = {
 
 
 @pytest.fixture(autouse=True)
-def reset_queue():
-    """Reset queue state between tests to avoid cross-test pollution."""
-    q = main_module.queue
-    q._jobs.clear()
-    q._active = 0
-    q._queued = 0
-    q._draining = False
-    yield
-    q._jobs.clear()
-    q._active = 0
-    q._queued = 0
-    q._draining = False
+def patch_celery_submit():
+    """Patch run_pipeline_task.apply_async so tests don't need a real Redis broker."""
+    with patch("siphon.queue.run_pipeline_task") as mock_task:
+        mock_task.apply_async = MagicMock()
+        yield mock_task
 
 
 @pytest.fixture
 def client():
     """TestClient triggers lifespan (queue.start() and queue.drain())."""
-    # Use a short drain timeout so tests don't hang waiting for background jobs.
-    # DRAIN_TIMEOUT is read by the lifespan coroutine at drain-call time, so
-    # patching the module variable here keeps it in effect through __exit__.
     main_module.DRAIN_TIMEOUT = 2
     with TestClient(app) as tc:
         yield tc
@@ -113,16 +105,6 @@ def test_post_jobs_returns_job_id(client):
     r1 = client.post("/jobs", json=VALID_REQUEST)
     r2 = client.post("/jobs", json=VALID_REQUEST)
     assert r1.json()["job_id"] != r2.json()["job_id"]  # unique UUIDs
-
-
-def test_post_jobs_429_when_queue_full(client):
-    q = main_module.queue
-    # Manually saturate the queue
-    q._active = q._max_workers
-    q._queued = q._max_queue
-    response = client.post("/jobs", json=VALID_REQUEST)
-    assert response.status_code == 429
-    assert "Queue is full" in response.json()["detail"]
 
 
 def test_post_jobs_invalid_source_type_returns_422(client):
@@ -147,19 +129,6 @@ def test_post_extract_returns_200_with_status(client, monkeypatch):
         main_module.ENABLE_SYNC_EXTRACT = False
 
 
-def test_post_extract_429_when_queue_full(client, monkeypatch):
-    monkeypatch.setenv("SIPHON_ENABLE_SYNC_EXTRACT", "true")
-    main_module.ENABLE_SYNC_EXTRACT = True
-    try:
-        q = main_module.queue
-        q._active = q._max_workers
-        q._queued = q._max_queue
-        response = client.post("/extract", json=VALID_REQUEST)
-        assert response.status_code == 429
-    finally:
-        main_module.ENABLE_SYNC_EXTRACT = False
-
-
 def test_post_extract_disabled_by_default(client):
     """POST /extract returns 404 unless SIPHON_ENABLE_SYNC_EXTRACT=true."""
     main_module.ENABLE_SYNC_EXTRACT = False
@@ -170,49 +139,59 @@ def test_post_extract_disabled_by_default(client):
 # ── GET /jobs/{id} ────────────────────────────────────────────────────────────
 
 
-def test_get_job_returns_status(client):
-    post = client.post("/jobs", json=VALID_REQUEST)
-    job_id = post.json()["job_id"]
-    response = client.get(f"/jobs/{job_id}")
-    assert response.status_code == 200
-    body = response.json()
-    assert body["job_id"] == job_id
-    assert body["status"] in ("queued", "running", "success", "failed")
-
-
 def test_get_job_404_for_unknown(client):
-    response = client.get("/jobs/nonexistent-id")
-    assert response.status_code == 404
+    # Use main_module.get_db — the function bound in the app's routes at import time.
+    # (siphon.db may have been reloaded by test_db.py, giving a different get_db object.)
+    db_mock = AsyncMock()
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = None
+    db_mock.execute = AsyncMock(return_value=result_mock)
+
+    async def _override_db():
+        yield db_mock
+
+    app.dependency_overrides[main_module.get_db] = _override_db
+    try:
+        response = client.get("/jobs/nonexistent-id")
+        assert response.status_code == 404
+    finally:
+        del app.dependency_overrides[main_module.get_db]
+
+
+def test_get_job_by_job_id_reads_from_db(client):
+    """GET /jobs/{id} must read from job_runs table, not in-memory queue."""
+    run = MagicMock()
+    run.job_id = str(uuid.uuid4())
+    run.status = "success"
+    run.rows_read = 42
+    run.rows_written = 40
+    run.started_at = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+    run.finished_at = datetime(2026, 1, 1, 0, 0, 5, tzinfo=UTC)
+    run.error = None
+
+    db_mock = AsyncMock()
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = run
+    db_mock.execute = AsyncMock(return_value=result_mock)
+
+    async def _override_db():
+        yield db_mock
+
+    app.dependency_overrides[main_module.get_db] = _override_db
+    try:
+        response = client.get(f"/jobs/{run.job_id}")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["job_id"] == run.job_id
+        assert body["status"] == "success"
+        assert body["rows_read"] == 42
+        assert body["rows_written"] == 40
+        assert body["duration_ms"] == 5000
+    finally:
+        del app.dependency_overrides[main_module.get_db]
 
 
 # ── GET /jobs/{id}/logs ───────────────────────────────────────────────────────
-
-
-def test_get_job_logs_returns_logs_response(client):
-    post = client.post("/jobs", json=VALID_REQUEST)
-    job_id = post.json()["job_id"]
-    response = client.get(f"/jobs/{job_id}/logs")
-    assert response.status_code == 200
-    body = response.json()
-    assert body["job_id"] == job_id
-    assert isinstance(body["logs"], list)
-    assert "next_offset" in body
-
-
-def test_get_job_logs_with_since_offset(client):
-    post = client.post("/jobs", json=VALID_REQUEST)
-    job_id = post.json()["job_id"]
-    # Wait briefly for job to produce logs
-    import time
-
-    time.sleep(0.2)
-    # Full logs
-    full = client.get(f"/jobs/{job_id}/logs?since=0").json()
-    # Skip first log line
-    partial = client.get(f"/jobs/{job_id}/logs?since=1").json()
-    assert partial["next_offset"] == full["next_offset"]
-    if len(full["logs"]) > 1:
-        assert partial["logs"] == full["logs"][1:]
 
 
 def test_get_job_logs_404_for_unknown(client):
@@ -239,31 +218,10 @@ def test_health_ready_returns_200_when_accepting(client):
     assert body["accepting_jobs"] is True
 
 
-def test_health_ready_returns_503_when_queue_full(client):
-    q = main_module.queue
-    q._active = q._max_workers
-    q._queued = q._max_queue
-    response = client.get("/health/ready")
-    assert response.status_code == 503
-    body = response.json()
-    assert body["accepting_jobs"] is False
-    assert body["reason"] == "queue_full"
-
-
-def test_health_ready_returns_503_when_draining(client):
-    main_module.queue._draining = True
-    response = client.get("/health/ready")
-    assert response.status_code == 503
-    body = response.json()
-    assert body["accepting_jobs"] is False
-    assert body["reason"] == "draining"
-
-
 # ── GET /health ───────────────────────────────────────────────────────────────
 
 
 def test_health_debug_returns_full_info(client):
-    from unittest.mock import MagicMock
     admin_user = MagicMock()
     admin_user.role = "admin"
     admin_principal = Principal(type="user", user=admin_user)
@@ -278,7 +236,7 @@ def test_health_debug_returns_full_info(client):
     assert "accepting_jobs" in body
     assert "queue" in body
     assert "uptime_seconds" in body
-    assert body["queue"]["workers_max"] == main_module.queue._max_workers
+    assert body["queue"]["backend"] == "celery"
 
 
 # ── Security: request size limit ─────────────────────────────────────────────
@@ -296,7 +254,6 @@ def test_request_too_large_returns_413(client, monkeypatch):
 
 def test_422_does_not_include_raw_body(client):
     """Validation errors must not echo the request body (credentials leak prevention)."""
-    # Use a request with a sensitive-looking value that would appear in "input" if leaked
     bad_req = {
         "source": {
             "type": "sql",
@@ -315,14 +272,11 @@ def test_422_does_not_include_raw_body(client):
     assert response.status_code == 422
     body = response.json()
     response_text = str(body)
-    # The password must NOT appear anywhere in the response
     assert "SuperSecret123" not in response_text
     assert "admin" not in response_text
-    # Errors should still provide useful information (type, loc, msg)
     assert "detail" in body
     errors = body.get("errors", [])
     assert len(errors) > 0
-    # No error dict should have an "input" key
     for err in errors:
         assert "input" not in err, f"Error dict leaks input data: {err}"
 
@@ -330,11 +284,10 @@ def test_422_does_not_include_raw_body(client):
 # ── Phase 8 additions — API key via get_current_principal ─────────────────────
 
 
-def test_existing_post_jobs_still_works_with_api_key(reset_queue):
+def test_existing_post_jobs_still_works_with_api_key(patch_celery_submit):
     """POST /jobs must still work with SIPHON_API_KEY after middleware→dependency swap."""
     import importlib
     with patch.dict("os.environ", {"SIPHON_API_KEY": "testkey"}):
-        # Reload in dependency order so all function references are consistent
         import siphon.db as db_module
         importlib.reload(db_module)
         import siphon.auth.deps as deps_module
@@ -357,30 +310,31 @@ def test_existing_post_jobs_still_works_with_api_key(reset_queue):
         assert resp.status_code == 202
 
 
-def test_existing_post_jobs_blocked_without_api_key(reset_queue):
+def test_existing_post_jobs_blocked_without_api_key(patch_celery_submit):
     """POST /jobs returns 401 when SIPHON_API_KEY is set and header is missing."""
     import importlib
     with patch.dict("os.environ", {"SIPHON_API_KEY": "testkey"}):
-        # Reload in dependency order so all function references are consistent
         import siphon.db as db_module
         importlib.reload(db_module)
         import siphon.auth.deps as deps_module
         importlib.reload(deps_module)
         importlib.reload(main_module)
+
         from unittest.mock import AsyncMock
 
-        # No override — let get_current_principal run for real, but mock DB
         from siphon.db import get_db as current_get_db
         from siphon.main import app as reloaded_app
+
         async def _mock_db():
             yield AsyncMock()
+
         reloaded_app.dependency_overrides[current_get_db] = _mock_db
         client = TestClient(reloaded_app)
         resp = client.post("/jobs", json=VALID_REQUEST)
         assert resp.status_code == 401
 
 
-def test_health_live_no_auth_needed():
+def test_health_live_no_auth_needed(patch_celery_submit):
     """GET /health/live must not require auth (Kubernetes probe)."""
     import importlib
     with patch.dict("os.environ", {"SIPHON_API_KEY": "testkey"}):
@@ -391,7 +345,7 @@ def test_health_live_no_auth_needed():
         assert resp.status_code == 200
 
 
-def test_health_ready_no_auth_needed():
+def test_health_ready_no_auth_needed(patch_celery_submit):
     """GET /health/ready must not require auth (Kubernetes probe)."""
     import importlib
     with patch.dict("os.environ", {"SIPHON_API_KEY": "testkey"}):

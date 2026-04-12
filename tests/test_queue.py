@@ -1,281 +1,68 @@
 # tests/test_queue.py
-import asyncio
-import threading
+"""Tests for the Celery-backed JobQueue wrapper."""
+from unittest.mock import MagicMock, patch
 
-import pyarrow as pa
 import pytest
-from fastapi import HTTPException
 
 from siphon.models import Job
-from siphon.plugins.destinations.base import Destination
-from siphon.plugins.sources.base import Source
 from siphon.queue import JobQueue
-
-# ── Inline stubs ──────────────────────────────────────────────────────────────
-
-
-class _FastSource(Source):
-    def extract(self) -> pa.Table:
-        return pa.table({"x": [1, 2, 3]})
-
-
-class _NopDest(Destination):
-    def write(self, table: pa.Table, is_first_chunk: bool = True) -> int:
-        return table.num_rows
-
-
-def _blocking_source(gate: threading.Event) -> Source:
-    """Returns a Source that blocks until gate is set."""
-
-    class _Blocking(Source):
-        def extract(self) -> pa.Table:
-            gate.wait(timeout=10)
-            return pa.table({"x": [1]})
-
-    return _Blocking()
 
 
 @pytest.fixture
 def q():
-    queue = JobQueue(max_workers=2, max_queue=2, job_timeout=5)
-    queue.start()
-    yield queue
-    # Cleanup: release any blocking threads
-    if queue._executor:
-        queue._executor.shutdown(wait=False)
+    return JobQueue()
 
 
-# ── Tests ─────────────────────────────────────────────────────────────────────
+async def test_submit_dispatches_to_celery(q):
+    """submit() must call run_pipeline_task.apply_async with the correct queue and task_id."""
+    job = Job(job_id="j-normal", priority="normal")
+    with patch("siphon.queue.run_pipeline_task") as mock_task:
+        mock_task.apply_async = MagicMock()
+        await q.submit(job, {}, {})
+    mock_task.apply_async.assert_called_once()
+    _, kwargs = mock_task.apply_async.call_args
+    assert kwargs["queue"] == "normal"
+    assert kwargs.get("task_id") == "j-normal"
 
 
-async def test_submit_accepts_job(q):
-    job = Job(job_id="j-ok")
-    await q.submit(job, _FastSource(), _NopDest())
-    # Job is registered immediately
-    assert q.get_job("j-ok") is job
+async def test_submit_uses_high_queue_for_high_priority(q):
+    job = Job(job_id="j-high", priority="high")
+    with patch("siphon.queue.run_pipeline_task") as mock_task:
+        mock_task.apply_async = MagicMock()
+        await q.submit(job, {}, {})
+    _, kwargs = mock_task.apply_async.call_args
+    assert kwargs["queue"] == "high"
 
 
-async def test_submit_job_eventually_succeeds(q):
-    job = Job(job_id="j-success")
-    await q.submit(job, _FastSource(), _NopDest())
-    # Wait for completion
-    for _ in range(50):  # up to 5 seconds
-        await asyncio.sleep(0.1)
-        if job.status not in ("queued", "running"):
-            break
-    assert job.status == "success"
-    assert job.rows_read == 3
+async def test_submit_uses_low_queue_for_low_priority(q):
+    job = Job(job_id="j-low", priority="low")
+    with patch("siphon.queue.run_pipeline_task") as mock_task:
+        mock_task.apply_async = MagicMock()
+        await q.submit(job, {}, {})
+    _, kwargs = mock_task.apply_async.call_args
+    assert kwargs["queue"] == "low"
 
 
-async def test_submit_raises_429_when_full():
-    """With max_workers=1 and max_queue=0, the second job must get 429."""
-    gate = threading.Event()
-    q = JobQueue(max_workers=1, max_queue=0, job_timeout=5)
-    q.start()
-    try:
-        job1 = Job(job_id="j-blocker")
-        await q.submit(job1, _blocking_source(gate), _NopDest())
-        await asyncio.sleep(0.1)  # let _dispatch start and increment _active
-
-        job2 = Job(job_id="j-overflow")
+async def test_submit_raises_503_when_celery_unreachable(q):
+    """If apply_async raises, submit() must raise HTTP 503."""
+    from fastapi import HTTPException
+    job = Job(job_id="j-err", priority="normal")
+    with patch("siphon.queue.run_pipeline_task") as mock_task:
+        mock_task.apply_async = MagicMock(side_effect=Exception("Redis down"))
         with pytest.raises(HTTPException) as exc_info:
-            await q.submit(job2, _FastSource(), _NopDest())
-        assert exc_info.value.status_code == 429
-    finally:
-        gate.set()
-        q._executor.shutdown(wait=False)
-
-
-async def test_is_full_false_when_capacity_available(q):
-    assert q.is_full is False
-
-
-async def test_is_full_true_when_at_capacity():
-    q = JobQueue(max_workers=1, max_queue=0, job_timeout=5)
-    q.start()
-    gate = threading.Event()
-    try:
-        job = Job(job_id="j-fill")
-        await q.submit(job, _blocking_source(gate), _NopDest())
-        await asyncio.sleep(0.1)
-        assert q.is_full is True
-    finally:
-        gate.set()
-        q._executor.shutdown(wait=False)
-
-
-async def test_get_job_returns_none_for_unknown(q):
-    assert q.get_job("nonexistent") is None
-
-
-async def test_stats_reflects_queue_state(q):
-    stats = q.stats
-    assert "workers_active" in stats
-    assert "workers_max" in stats
-    assert "jobs_queued" in stats
-    assert "jobs_total" in stats
-    assert stats["workers_max"] == 2
-
-
-async def test_drain_waits_for_active_jobs():
-    gate = threading.Event()
-    q = JobQueue(max_workers=1, max_queue=0, job_timeout=10)
-    q.start()
-    job = Job(job_id="j-drain")
-    await q.submit(job, _blocking_source(gate), _NopDest())
-    await asyncio.sleep(0.1)  # let job start
-    assert job.status == "running"
-    assert q.is_draining is False
-
-    # Release gate so job can finish, then drain
-    gate.set()
-    await q.drain(timeout=5.0)
-
-    assert job.status == "success"
-    assert q.is_draining is True
-
-
-async def test_drain_rejects_new_submissions():
-    q = JobQueue(max_workers=1, max_queue=0, job_timeout=5)
-    q.start()
-    await q.drain(timeout=0.0)  # drain immediately (no active jobs)
-    assert q.is_draining is True
-
-    job = Job(job_id="j-after-drain")
-    with pytest.raises(HTTPException) as exc_info:
-        await q.submit(job, _FastSource(), _NopDest())
+            await q.submit(job, {}, {})
     assert exc_info.value.status_code == 503
 
 
-async def test_drain_timeout_marks_running_jobs_failed():
-    gate = threading.Event()
-    q = JobQueue(max_workers=1, max_queue=0, job_timeout=10)
-    q.start()
-    job = Job(job_id="j-abort")
-    await q.submit(job, _blocking_source(gate), _NopDest())
-    await asyncio.sleep(0.1)
-    assert job.status == "running"
-
-    # drain with a 0.1s timeout — job is still blocked
-    await q.drain(timeout=0.1)
-
-    # Job must be marked failed due to drain timeout
-    assert job.status == "failed"
-    assert "shutdown" in job.error.lower()
-    gate.set()  # unblock thread so it can exit cleanly
-    q._executor.shutdown(wait=False)
+async def test_get_job_returns_none(q):
+    """In Celery mode, get_job always returns None (state is in DB)."""
+    assert q.get_job("anything") is None
 
 
-async def test_evict_expired_removes_old_completed_jobs():
-    """Completed jobs older than TTL are removed from _jobs."""
-    from datetime import UTC, datetime, timedelta
-
-    q = JobQueue(max_workers=1, max_queue=0, job_timeout=5, job_ttl=60)
-    q.start()
-
-    # Manually plant a completed job with a finished_at in the past
-    old_job = Job(job_id="j-old")
-    old_job.status = "success"
-    old_job.finished_at = datetime.now(tz=UTC) - timedelta(seconds=120)
-    q._jobs["j-old"] = old_job
-
-    q._evict_expired()
-
-    assert q.get_job("j-old") is None
+async def test_stats_returns_backend_key(q):
+    stats = q.stats
+    assert stats["backend"] == "celery"
 
 
-async def test_evict_expired_keeps_running_jobs():
-    """Running jobs are never evicted regardless of age."""
-    q = JobQueue(max_workers=1, max_queue=0, job_timeout=5, job_ttl=60)
-    q.start()
-
-    running_job = Job(job_id="j-running")
-    running_job.status = "running"
-    running_job.finished_at = None
-    q._jobs["j-running"] = running_job
-
-    q._evict_expired()
-
-    assert q.get_job("j-running") is running_job
-
-
-async def test_high_priority_job_dispatched_before_low():
-    """High-priority job must be dispatched before a low-priority job when both are queued."""
-    dispatch_order = []
-    gate = threading.Event()
-
-    class _RecordingSource(Source):
-        def __init__(self, name):
-            self.name = name
-        def extract(self) -> pa.Table:
-            dispatch_order.append(self.name)
-            gate.wait(timeout=5)
-            return pa.table({"x": [1]})
-
-    q = JobQueue(max_workers=1, max_queue=5, job_timeout=10)
-    q.start()
-    try:
-        # Fill the one worker slot with a blocking job
-        blocker = Job(job_id="j-blocker", priority="normal")
-        await q.submit(blocker, _RecordingSource("blocker"), _NopDest())
-        await asyncio.sleep(0.15)  # let blocker start
-
-        # Enqueue low then high — high must come out first
-        low_job = Job(job_id="j-low", priority="low")
-        high_job = Job(job_id="j-high", priority="high")
-        await q.submit(low_job, _RecordingSource("low"), _NopDest())
-        await q.submit(high_job, _RecordingSource("high"), _NopDest())
-
-        gate.set()  # release blocker + both queued jobs
-        for _ in range(80):
-            await asyncio.sleep(0.1)
-            if high_job.status not in ("queued", "running") and low_job.status not in ("queued", "running"):
-                break
-
-        # blocker first (already running), then high before low
-        assert dispatch_order[1] == "high", f"Expected 'high' second, got {dispatch_order}"
-        assert dispatch_order[2] == "low", f"Expected 'low' third, got {dispatch_order}"
-    finally:
-        gate.set()
-        if q._executor:
-            q._executor.shutdown(wait=False)
-
-
-async def test_concurrency_limit_per_connection():
-    """Jobs sharing a source_connection_id must respect max_concurrent limit."""
-    active_count = []
-    conn_id = "conn-abc"
-
-    class _CountingSource(Source):
-        def extract(self) -> pa.Table:
-            active_count.append(1)
-            import time
-            time.sleep(0.2)  # simulate work
-            active_count.append(-1)
-            return pa.table({"x": [1]})
-
-    q = JobQueue(max_workers=4, max_queue=10, job_timeout=10)
-    q.start()
-    try:
-        jobs = []
-        for i in range(4):
-            job = Job(job_id=f"j-{i}", priority="normal")
-            job.source_connection_id = conn_id
-            await q.submit(job, _CountingSource(), _NopDest(), max_concurrent=2)
-            jobs.append(job)
-
-        for _ in range(60):
-            await asyncio.sleep(0.1)
-            if all(j.status not in ("queued", "running") for j in jobs):
-                break
-
-        # Max concurrent active for this connection must never exceed 2
-        peak = 0
-        running = 0
-        for delta in active_count:
-            running += delta
-            peak = max(peak, running)
-        assert peak <= 2, f"Peak concurrency was {peak}, expected <= 2"
-    finally:
-        if q._executor:
-            q._executor.shutdown(wait=False)
+async def test_is_full_always_false(q):
+    assert q.is_full is False

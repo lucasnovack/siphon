@@ -1,0 +1,30 @@
+# src/siphon/celery_app.py
+import os
+
+from celery import Celery
+from kombu import Queue
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
+app = Celery("siphon")
+
+app.conf.update(
+    broker_url=REDIS_URL,
+    result_backend=REDIS_URL,
+    task_serializer="json",
+    result_serializer="json",
+    accept_content=["json"],
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    worker_prefetch_multiplier=1,
+    task_queues=(
+        Queue("high"),
+        Queue("normal"),
+        Queue("low"),
+    ),
+    task_default_queue="normal",
+    broker_connection_retry_on_startup=True,
+)
+
+# Auto-discover tasks from siphon.tasks
+app.autodiscover_tasks(["siphon"])

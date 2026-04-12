@@ -5,6 +5,7 @@ GET  /api/v1/runs              — paginated list of all job_runs
 GET  /api/v1/runs/{id}/logs    — cursor-based in-memory logs for a running job
 POST /api/v1/runs/{id}/cancel  — request cancellation of a queued/running job
 """
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +14,7 @@ from siphon.auth.deps import Principal, get_current_principal
 from siphon.db import get_db
 from siphon.orm import JobRun
 
+logger = structlog.get_logger()
 router = APIRouter(prefix="/api/v1/runs", tags=["runs"])
 
 
@@ -107,10 +109,7 @@ async def cancel_run(
 ) -> dict:
     """Request cancellation of a queued or running job.
 
-    Siphon's queue does not support hard-kill of running threads.  This endpoint
-    marks the job as ``failed`` with ``error="Cancelled by user"`` if it is still
-    queued (not yet started).  Running jobs log a cancellation request but finish
-    naturally — true mid-extraction cancel is not implemented in v1.
+    Revokes the Celery task (best-effort) and marks the run as failed in the DB.
     """
     principal.require_admin()
 
@@ -120,23 +119,16 @@ async def cancel_run(
     if run is None:
         raise HTTPException(404, "Run not found")
     if run.status not in ("queued", "running"):
-        raise HTTPException(409, f"Run is already {run.status!r}")
+        raise HTTPException(409, f"Cannot cancel job in status '{run.status}'")
 
-    from siphon.main import queue
+    # Revoke the Celery task (best-effort; no-op if task already completed)
+    try:
+        from siphon.celery_app import app as celery_app
+        celery_app.control.revoke(run.job_id, terminate=True, signal="SIGTERM")
+    except Exception:
+        logger.warning("celery_revoke_failed", run_id=run_id)
 
-    job = queue.get_job(run_id)
-    if job is None:
-        raise HTTPException(409, "Job not found in queue (may have already completed)")
-
-    if job.status == "queued":
-        job.status = "failed"
-        job.error = "Cancelled by user"
-        job.logs.append("ERROR: Cancelled by user")
-        run.status = "failed"
-        run.error = "Cancelled by user"
-        await db.commit()
-        return {"run_id": run_id, "status": "failed", "message": "Job cancelled"}
-
-    # Running — cannot hard-kill; log the request
-    job.logs.append("WARNING: Cancellation requested by user (job will finish current batch)")
-    return {"run_id": run_id, "status": "running", "message": "Cancellation requested"}
+    run.status = "failed"
+    run.error = "Cancelled by user"
+    await db.commit()
+    return {"status": "cancelled"}

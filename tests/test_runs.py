@@ -139,18 +139,25 @@ def test_cancel_queued_run(client):
     db.execute = AsyncMock(return_value=result_mock)
     db.commit = AsyncMock()
 
-    from siphon.models import Job
-    job = MagicMock(spec=Job)
-    job.status = "queued"
-    job.logs = []
-
     from unittest.mock import patch
-    with patch("siphon.main.queue") as mock_queue:
-        mock_queue.get_job.return_value = job
-        resp = tc.post(f"/api/v1/runs/{run.id}/cancel")
+    with patch("siphon.celery_app.app") as mock_celery:
+        mock_celery.control.revoke = MagicMock()
+        resp = tc.post(f"/api/v1/runs/{run.job_id}/cancel")
 
     assert resp.status_code == 202
-    assert job.status == "failed"
+    assert resp.json()["status"] == "cancelled"
+    assert run.status == "failed"
+    assert run.error == "Cancelled by user"
+
+
+def test_cancel_returns_404_for_unknown_run(client):
+    """Cancel must return 404 when run_id does not exist in job_runs."""
+    tc, db = client
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = None
+    db.execute = AsyncMock(return_value=result_mock)
+    resp = tc.post("/api/v1/runs/nonexistent-uuid/cancel")
+    assert resp.status_code == 404
 
 
 def test_cancel_already_finished_returns_409(client):
@@ -159,5 +166,5 @@ def test_cancel_already_finished_returns_409(client):
     result_mock = MagicMock()
     result_mock.scalar_one_or_none.return_value = run
     db.execute = AsyncMock(return_value=result_mock)
-    resp = tc.post(f"/api/v1/runs/{run.id}/cancel")
+    resp = tc.post(f"/api/v1/runs/{run.job_id}/cancel")
     assert resp.status_code == 409

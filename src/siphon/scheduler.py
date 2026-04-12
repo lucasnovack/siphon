@@ -417,6 +417,8 @@ async def _async_trigger_pipeline(pipeline_id_str: str) -> None:
             status="queued",
             triggered_by="schedule",
             created_at=now,
+            source_connection_id=src_conn.id,
+            destination_path=dest_path,
         )
         session.add(run)
         await session.commit()
@@ -424,15 +426,17 @@ async def _async_trigger_pipeline(pipeline_id_str: str) -> None:
         job.run_id = run.id
 
     try:
-        source_cls = get_source(req.source.type)
-        dest_cls = get_destination(req.destination.type)
+        get_source(req.source.type)
+        get_destination(req.destination.type)
     except ValueError as exc:
         logger.error("Scheduled pipeline %s: %s", pipeline_id_str, exc)
         return
 
-    source = source_cls(**req.source.model_dump(exclude={"type"}))
-    destination = dest_cls(**req.destination.model_dump(exclude={"type"}))
-
     from siphon.main import queue
-    await queue.submit(job, source, destination, max_concurrent=src_conn.max_concurrent_jobs)
+    await queue.submit(
+        job,
+        source_payload,
+        dest_payload,
+        max_concurrent=src_conn.max_concurrent_jobs,
+    )
     logger.info("Scheduled trigger queued: pipeline=%s job=%s", pipeline_id_str, job.job_id)

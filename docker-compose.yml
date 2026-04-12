@@ -16,6 +16,7 @@ services:
       # Bootstrap admin (only used when no users exist in the database)
       SIPHON_ADMIN_EMAIL: "admin@example.com"
       SIPHON_ADMIN_PASSWORD: "changeme123"
+      REDIS_URL: redis://redis:6379/0
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -27,6 +28,36 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  siphon-worker:
+    build: .
+    command: >
+      celery -A siphon.celery_app worker
+      --loglevel=info
+      -Q high,normal,low
+      --concurrency=4
+      --without-gossip
+      --without-mingle
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      SIPHON_ENCRYPTION_KEY: ${SIPHON_ENCRYPTION_KEY}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    stop_grace_period: 300s
 
   postgres:
     image: postgres:16

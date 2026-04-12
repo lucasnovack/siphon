@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 
 import structlog
 from fastapi import Depends, FastAPI, HTTPException, Request
+from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -19,7 +20,7 @@ from siphon.auth.deps import Principal, get_current_principal
 from siphon.auth.router import limiter
 from siphon.auth.router import router as auth_router
 from siphon.connections.router import router as connections_router
-from siphon.db import get_session_factory
+from siphon.db import get_db, get_session_factory
 from siphon.models import ExtractRequest, Job, JobStatus, LogsResponse
 from siphon.pipelines.router import router as pipelines_router
 from siphon.plugins.destinations import get as get_destination
@@ -275,8 +276,10 @@ async def create_job(
     _: Principal = Depends(get_current_principal),  # noqa: B008
 ) -> dict:
     """Submit an async extraction job. Returns immediately with job_id."""
-    job, source, destination = _make_job_and_plugins(req)
-    await queue.submit(job, source, destination)
+    job, _, __ = _make_job_and_plugins(req)
+    source_config = req.source.model_dump()
+    dest_config = req.destination.model_dump()
+    await queue.submit(job, source_config, dest_config)
     return {"job_id": job.job_id, "status": job.status}
 
 
@@ -289,24 +292,17 @@ async def extract_sync(
     if not ENABLE_SYNC_EXTRACT:
         raise HTTPException(status_code=404, detail="Not Found")
 
-    import asyncio
-
-    job, source, destination = _make_job_and_plugins(req)
-    await queue.submit(job, source, destination)
-
-    while job.status in ("queued", "running"):
-        await asyncio.sleep(0.05)
-
-    duration_ms = None
-    if job.started_at and job.finished_at:
-        duration_ms = int((job.finished_at - job.started_at).total_seconds() * 1000)
+    job, _, __ = _make_job_and_plugins(req)
+    source_config = req.source.model_dump()
+    dest_config = req.destination.model_dump()
+    await queue.submit(job, source_config, dest_config)
 
     return {
         "job_id": job.job_id,
         "status": job.status,
         "rows_read": job.rows_read,
         "rows_written": job.rows_written,
-        "duration_ms": duration_ms,
+        "duration_ms": None,
         "error": job.error,
         "logs": job.logs,
     }
@@ -316,11 +312,31 @@ async def extract_sync(
 async def get_job(
     job_id: str,
     _: Principal = Depends(get_current_principal),  # noqa: B008
+    db: AsyncSession = Depends(get_db),  # noqa: B008
 ) -> JobStatus:
-    job = queue.get_job(job_id)
-    if not job:
+    from sqlalchemy import select
+
+    from siphon.orm import JobRun
+
+    result = await db.execute(
+        select(JobRun).where(JobRun.job_id == job_id).order_by(JobRun.id.desc()).limit(1)
+    )
+    run = result.scalar_one_or_none()
+    if run is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
-    return job.to_status()
+
+    duration_ms = None
+    if run.started_at and run.finished_at:
+        duration_ms = int((run.finished_at - run.started_at).total_seconds() * 1000)
+
+    return JobStatus(
+        job_id=run.job_id,
+        status=run.status,
+        rows_read=run.rows_read,
+        rows_written=run.rows_written,
+        duration_ms=duration_ms,
+        error=run.error,
+    )
 
 
 @app.get("/jobs/{job_id}/logs", response_model=LogsResponse)
@@ -329,15 +345,9 @@ async def get_job_logs(
     since: int = 0,
     _: Principal = Depends(get_current_principal),  # noqa: B008
 ) -> LogsResponse:
-    job = queue.get_job(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
-    logs_slice = job.logs[since:]
-    return LogsResponse(
-        job_id=job_id,
-        logs=logs_slice,
-        next_offset=since + len(logs_slice),
-    )
+    # In Phase 16, job state is stored in the DB (job_runs table).
+    # Task 4 will implement DB-backed lookup; for now return 404.
+    raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
 
 
 @app.get("/health/live")
