@@ -32,6 +32,7 @@ def _make_conn_row(name="prod-mysql"):
     row.max_concurrent_jobs = 2
     row.created_at = datetime.now(tz=UTC)
     row.updated_at = datetime.now(tz=UTC)
+    row.deleted_at = None
     return row
 
 
@@ -158,11 +159,55 @@ def test_update_connection_returns_200(client):
 def test_delete_connection_returns_204(client):
     tc, db = client
     row = _make_conn_row()
+    row.deleted_at = None
     db.get = AsyncMock(return_value=row)
     db.delete = AsyncMock()
     db.commit = AsyncMock()
     resp = tc.delete(f"/api/v1/connections/{row.id}")
     assert resp.status_code == 204
+
+
+def test_delete_connection_soft_deletes(client):
+    """DELETE /connections/{id} must set deleted_at, not remove the row."""
+    tc, db = client
+    conn = _make_conn_row()
+    conn.deleted_at = None
+    db.get = AsyncMock(return_value=conn)
+    db.commit = AsyncMock()
+
+    resp = tc.delete(f"/api/v1/connections/{conn.id}")
+    assert resp.status_code == 204
+    assert conn.deleted_at is not None
+
+
+def test_list_connections_excludes_soft_deleted(client):
+    """GET /connections must not return rows where deleted_at is set."""
+    tc, db = client
+    alive = _make_conn_row("alive")
+    alive.deleted_at = None
+    alive.max_concurrent_jobs = 2
+    dead = _make_conn_row("dead")
+    dead.deleted_at = datetime.now(tz=UTC)
+    dead.max_concurrent_jobs = 2
+    # Simulate DB returning only alive (WHERE deleted_at IS NULL)
+    db.execute = AsyncMock(return_value=MagicMock(
+        scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[alive])))
+    ))
+    resp = tc.get("/api/v1/connections")
+    assert resp.status_code == 200
+    names = [c["name"] for c in resp.json()]
+    assert "alive" in names
+    assert "dead" not in names
+
+
+def test_get_deleted_connection_returns_404(client):
+    """GET /connections/{id} for a soft-deleted row must return 404."""
+    tc, db = client
+    conn = _make_conn_row()
+    conn.deleted_at = datetime.now(tz=UTC)
+    db.get = AsyncMock(return_value=conn)
+    resp = tc.get(f"/api/v1/connections/{conn.id}")
+    assert resp.status_code == 404
 
 
 def test_connection_response_includes_max_concurrent_jobs(client):

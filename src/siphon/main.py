@@ -9,18 +9,19 @@ from datetime import UTC, datetime
 
 import structlog
 from fastapi import Depends, FastAPI, HTTPException, Request
-from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from siphon.auth.deps import Principal, get_current_principal
 from siphon.auth.router import limiter
 from siphon.auth.router import router as auth_router
 from siphon.connections.router import router as connections_router
 from siphon.db import get_db, get_session_factory
+from siphon.gdpr.router import router as gdpr_router
 from siphon.models import ExtractRequest, Job, JobStatus, LogsResponse
 from siphon.pipelines.router import router as pipelines_router
 from siphon.plugins.destinations import get as get_destination
@@ -196,6 +197,7 @@ app.include_router(connections_router)
 app.include_router(pipelines_router)
 app.include_router(preview_router)
 app.include_router(runs_router)
+app.include_router(gdpr_router)
 
 
 # ── Middleware ────────────────────────────────────────────────────────────────

@@ -44,6 +44,7 @@ def _make_pipeline():
     p.priority = "normal"
     p.created_at = datetime.now(tz=UTC)
     p.updated_at = datetime.now(tz=UTC)
+    p.deleted_at = None
     return p
 
 
@@ -100,6 +101,38 @@ def test_create_pipeline_201(client):
             "extraction_mode": "full_refresh",
         })
     assert resp.status_code == 201
+
+
+def test_delete_pipeline_soft_deletes(client):
+    """DELETE /pipelines/{id} must set deleted_at and remove schedule from Celery."""
+    tc, db = client
+    pipeline = _make_pipeline_row()
+    pipeline.deleted_at = None
+    db.get = AsyncMock(return_value=pipeline)
+    db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
+    db.commit = AsyncMock()
+
+    with patch("siphon.pipelines.router.remove_schedule", new_callable=AsyncMock) as mock_remove:
+        resp = tc.delete(f"/api/v1/pipelines/{pipeline.id}")
+
+    assert resp.status_code == 204
+    assert pipeline.deleted_at is not None
+    mock_remove.assert_called_once_with(str(pipeline.id))
+
+
+def test_list_pipelines_excludes_soft_deleted(client):
+    """GET /pipelines must exclude rows where deleted_at is set."""
+    tc, db = client
+    alive = _make_pipeline_row()
+    alive.name = "alive-pipeline"
+    alive.deleted_at = None
+    db.execute = AsyncMock(return_value=MagicMock(
+        scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[alive])))
+    ))
+    resp = tc.get("/api/v1/pipelines")
+    assert resp.status_code == 200
+    assert len(resp.json()) == 1
+    assert resp.json()[0]["name"] == "alive-pipeline"
 
 
 def test_delete_pipeline_requires_admin(client):

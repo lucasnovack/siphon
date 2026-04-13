@@ -21,7 +21,12 @@ def _make_user(role: str = "admin") -> User:
     u.is_active = True
     u.created_at = datetime.now(tz=UTC)
     u.updated_at = datetime.now(tz=UTC)
+    u.deleted_at = None
     return u
+
+
+def _make_user_row(role: str = "operator") -> User:
+    return _make_user(role)
 
 
 def _users_app(mock_session: AsyncMock, current_user: User) -> TestClient:
@@ -152,3 +157,36 @@ def test_delete_user_returns_204():
     client = _users_app(mock_session, admin)
     resp = client.delete(f"/api/v1/users/{target.id}")
     assert resp.status_code == 204
+
+
+def test_delete_user_soft_deletes():
+    """DELETE /users/{id} must set deleted_at."""
+    admin = _make_user("admin")
+    user = _make_user_row()
+    user.deleted_at = None
+
+    mock_session = AsyncMock()
+    mock_session.get = AsyncMock(return_value=user)
+    mock_session.commit = AsyncMock()
+
+    client = _users_app(mock_session, admin)
+    resp = client.delete(f"/api/v1/users/{user.id}")
+    assert resp.status_code == 204
+    assert user.deleted_at is not None
+
+
+def test_list_users_excludes_soft_deleted():
+    """GET /users must exclude users where deleted_at is set."""
+    admin = _make_user("admin")
+    alive = _make_user_row()
+    alive.deleted_at = None
+
+    mock_session = AsyncMock()
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = [alive]
+    mock_session.execute = AsyncMock(return_value=result)
+
+    client = _users_app(mock_session, admin)
+    resp = client.get("/api/v1/users")
+    assert resp.status_code == 200
+    assert len(resp.json()) == 1

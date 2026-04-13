@@ -54,7 +54,11 @@ async def list_users(
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ) -> list[UserResponse]:
     principal.require_admin()
-    result = await db.execute(select(User).order_by(User.created_at))
+    result = await db.execute(
+        select(User)
+        .where(User.deleted_at.is_(None))
+        .order_by(User.created_at)
+    )
     return [_to_response(u) for u in result.scalars().all()]
 
 
@@ -91,7 +95,7 @@ async def get_user(
 ) -> UserResponse:
     principal.require_admin()
     user = await db.get(User, user_id)
-    if not user:
+    if user is None or user.deleted_at is not None:
         raise HTTPException(status_code=404, detail="User not found")
     return _to_response(user)
 
@@ -105,7 +109,7 @@ async def update_user(
 ) -> UserResponse:
     principal.require_admin()
     user = await db.get(User, user_id)
-    if not user:
+    if user is None or user.deleted_at is not None:
         raise HTTPException(status_code=404, detail="User not found")
     if body.role is not None:
         user.role = body.role
@@ -127,7 +131,7 @@ async def delete_user(
 ) -> None:
     principal.require_admin()
     user = await db.get(User, user_id)
-    if not user:
+    if user is None or user.deleted_at is not None:
         raise HTTPException(status_code=404, detail="User not found")
-    await db.delete(user)
+    user.deleted_at = datetime.now(tz=UTC)
     await db.commit()

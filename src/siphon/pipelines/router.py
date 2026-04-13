@@ -15,6 +15,7 @@ from siphon.auth.deps import Principal, get_current_principal
 from siphon.auth.router import limiter
 from siphon.db import get_db
 from siphon.orm import Connection, JobRun, Pipeline, Schedule
+from siphon.scheduler import remove_schedule
 
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
 logger = structlog.get_logger()
@@ -196,7 +197,11 @@ async def list_pipelines(
     _: Principal = Depends(get_current_principal),  # noqa: B008
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ) -> list[PipelineResponse]:
-    result = await db.execute(select(Pipeline).order_by(Pipeline.created_at))
+    result = await db.execute(
+        select(Pipeline)
+        .where(Pipeline.deleted_at.is_(None))
+        .order_by(Pipeline.created_at)
+    )
     return [_to_response(p) for p in result.scalars().all()]
 
 
@@ -243,7 +248,7 @@ async def get_pipeline(
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ) -> PipelineResponse:
     p = await db.get(Pipeline, pipeline_id)
-    if not p:
+    if p is None or p.deleted_at is not None:
         raise HTTPException(404, "Pipeline not found")
     return _to_response(p)
 
@@ -257,7 +262,7 @@ async def update_pipeline(
 ) -> PipelineResponse:
     principal.require_admin()
     p = await db.get(Pipeline, pipeline_id)
-    if not p:
+    if p is None or p.deleted_at is not None:
         raise HTTPException(404, "Pipeline not found")
     for field in (
         "name", "query", "destination_path", "extraction_mode",
@@ -296,21 +301,20 @@ async def delete_pipeline(
 ) -> None:
     principal.require_admin()
     p = await db.get(Pipeline, pipeline_id)
-    if not p:
+    if p is None or p.deleted_at is not None:
         raise HTTPException(404, "Pipeline not found")
-    from sqlalchemy import update as sa_update
-    # Null out pipeline_id on job_runs first and flush so the FK is cleared before DELETE
-    await db.execute(
-        sa_update(JobRun).where(JobRun.pipeline_id == pipeline_id).values(pipeline_id=None)
-    )
-    await db.flush()
-    # Remove schedule (FK: schedules.pipeline_id → pipelines.id, no cascade)
+    now = datetime.now(tz=UTC)
+    p.deleted_at = now
+
+    # Cascade: soft-delete schedule if exists
     sched_result = await db.execute(select(Schedule).where(Schedule.pipeline_id == pipeline_id))
     schedule = sched_result.scalar_one_or_none()
     if schedule:
-        await db.delete(schedule)
-        await db.flush()
-    await db.delete(p)
+        schedule.deleted_at = now
+
+    # Always remove from Celery/APScheduler (idempotent) so the job stops firing
+    await remove_schedule(str(pipeline_id))
+
     await db.commit()
 
 
