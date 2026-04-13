@@ -5,7 +5,7 @@ from siphon.orm import Base, Connection, JobRun, Pipeline, RefreshToken, Schedul
 
 def test_user_columns():
     cols = {c.name for c in User.__table__.columns}
-    assert cols == {"id", "email", "hashed_password", "role", "is_active", "created_at", "updated_at"}
+    assert cols == {"id", "email", "hashed_password", "role", "is_active", "created_at", "updated_at", "deleted_at"}
 
 
 def test_refresh_token_columns():
@@ -15,7 +15,7 @@ def test_refresh_token_columns():
 
 def test_connection_columns():
     cols = {c.name for c in Connection.__table__.columns}
-    assert cols == {"id", "name", "conn_type", "encrypted_config", "key_version", "max_concurrent_jobs", "created_at", "updated_at"}
+    assert cols == {"id", "name", "conn_type", "encrypted_config", "key_version", "max_concurrent_jobs", "created_at", "updated_at", "deleted_at"}
 
 
 def test_pipeline_columns():
@@ -27,7 +27,7 @@ def test_pipeline_columns():
 
 def test_schedule_columns():
     cols = {c.name for c in Schedule.__table__.columns}
-    assert cols == {"id", "pipeline_id", "cron", "is_active", "next_run_at", "created_at", "updated_at"}
+    assert cols == {"id", "pipeline_id", "cron", "is_active", "next_run_at", "created_at", "updated_at", "deleted_at"}
 
 
 def test_job_run_columns():
@@ -41,7 +41,7 @@ def test_job_run_columns():
 
 def test_base_metadata_has_all_tables():
     assert set(Base.metadata.tables.keys()) == {
-        "users", "refresh_tokens", "connections", "pipelines", "schedules", "job_runs"
+        "users", "refresh_tokens", "connections", "pipelines", "schedules", "job_runs", "gdpr_events"
     }
 
 

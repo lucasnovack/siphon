@@ -84,8 +84,8 @@ def _to_event_response(e: GdprEvent) -> GdprEventResponse:
 @router.delete("/api/v1/pipelines/{pipeline_id}/data")
 async def purge_pipeline_data(
     pipeline_id: uuid.UUID,
-    before: date | None = Query(None, description="Delete files from partitions before this date"),
-    partition: str | None = Query(None, description="Delete files matching this partition value"),
+    before: date | None = Query(None, description="Delete files from partitions before this date"),  # noqa: B008
+    partition: str | None = Query(None, description="Delete files matching this partition value"),  # noqa: B008
     principal: Principal = Depends(get_current_principal),  # noqa: B008
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ) -> Any:

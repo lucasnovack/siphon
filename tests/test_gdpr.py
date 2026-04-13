@@ -1,7 +1,7 @@
 # tests/test_gdpr.py
 """Tests for GDPR purge API and audit log."""
 import uuid
-from datetime import UTC, datetime, date
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -72,9 +72,11 @@ def test_purge_returns_200_for_small_volume(client):
     db.commit = AsyncMock()
     db.refresh = AsyncMock()
 
-    with patch("siphon.gdpr.router._purge_s3_files", return_value={"files_deleted": 5, "bytes_deleted": 10240}):
-        with patch("siphon.gdpr.router._count_s3_files", return_value=5):
-            resp = tc.delete(f"/api/v1/pipelines/{pipeline.id}/data")
+    with (
+        patch("siphon.gdpr.router._purge_s3_files", return_value={"files_deleted": 5, "bytes_deleted": 10240}),
+        patch("siphon.gdpr.router._count_s3_files", return_value=5),
+    ):
+        resp = tc.delete(f"/api/v1/pipelines/{pipeline.id}/data")
 
     assert resp.status_code == 200
     assert resp.json()["files_deleted"] == 5
@@ -89,10 +91,12 @@ def test_purge_returns_202_for_large_volume(client):
     db.commit = AsyncMock()
     db.refresh = AsyncMock()
 
-    with patch("siphon.gdpr.router._count_s3_files", return_value=1500):
-        with patch("siphon.gdpr.router.purge_s3_data_task") as mock_task:
-            mock_task.apply_async = MagicMock()
-            resp = tc.delete(f"/api/v1/pipelines/{pipeline.id}/data")
+    with (
+        patch("siphon.gdpr.router._count_s3_files", return_value=1500),
+        patch("siphon.gdpr.router.purge_s3_data_task") as mock_task,
+    ):
+        mock_task.apply_async = MagicMock()
+        resp = tc.delete(f"/api/v1/pipelines/{pipeline.id}/data")
 
     assert resp.status_code == 202
     assert "event_id" in resp.json()

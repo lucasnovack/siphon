@@ -112,7 +112,7 @@ def test_delete_pipeline_soft_deletes(client):
     db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
     db.commit = AsyncMock()
 
-    with patch("siphon.pipelines.router.remove_schedule") as mock_remove:
+    with patch("siphon.pipelines.router.remove_schedule", new_callable=AsyncMock) as mock_remove:
         resp = tc.delete(f"/api/v1/pipelines/{pipeline.id}")
 
     assert resp.status_code == 204

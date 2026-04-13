@@ -206,7 +206,7 @@ def purge_s3_data_task(
         result = _purge_s3_files(base_path, before_date, partition_filter)
     except Exception as exc:
         logger.error("S3 purge failed", event_id=event_id, error=str(exc))
-        raise self.retry(exc=exc)
+        raise self.retry(exc=exc) from exc
 
     loop = asyncio.new_event_loop()
     try:

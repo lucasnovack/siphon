@@ -313,7 +313,7 @@ async def delete_pipeline(
         schedule.deleted_at = now
 
     # Always remove from Celery/APScheduler (idempotent) so the job stops firing
-    remove_schedule(str(pipeline_id))
+    await remove_schedule(str(pipeline_id))
 
     await db.commit()
 
