@@ -9,12 +9,12 @@ from datetime import UTC, datetime
 
 import structlog
 from fastapi import Depends, FastAPI, HTTPException, Request
-from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from siphon.auth.deps import Principal, get_current_principal
 from siphon.auth.router import limiter
