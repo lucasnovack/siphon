@@ -79,7 +79,11 @@ async def list_connections(
     _: Principal = Depends(get_current_principal),  # noqa: B008
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ) -> list[ConnectionResponse]:
-    result = await db.execute(select(Connection).order_by(Connection.created_at))
+    result = await db.execute(
+        select(Connection)
+        .where(Connection.deleted_at.is_(None))
+        .order_by(Connection.created_at)
+    )
     return [_to_response(c) for c in result.scalars().all()]
 
 
@@ -139,7 +143,7 @@ async def get_connection(
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ) -> ConnectionResponse:
     conn = await db.get(Connection, conn_id)
-    if not conn:
+    if conn is None or conn.deleted_at is not None:
         raise HTTPException(404, "Connection not found")
     return _to_response(conn)
 
@@ -153,7 +157,7 @@ async def update_connection(
 ) -> ConnectionResponse:
     principal.require_admin()
     conn = await db.get(Connection, conn_id)
-    if not conn:
+    if conn is None or conn.deleted_at is not None:
         raise HTTPException(404, "Connection not found")
     if body.name is not None:
         if body.name != conn.name:
@@ -180,9 +184,9 @@ async def delete_connection(
 ) -> None:
     principal.require_admin()
     conn = await db.get(Connection, conn_id)
-    if not conn:
+    if conn is None or conn.deleted_at is not None:
         raise HTTPException(404, "Connection not found")
-    await db.delete(conn)
+    conn.deleted_at = datetime.now(tz=UTC)
     await db.commit()
 
 
@@ -234,7 +238,7 @@ async def test_connection(
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ) -> dict:
     conn = await db.get(Connection, conn_id)
-    if not conn:
+    if conn is None or conn.deleted_at is not None:
         raise HTTPException(404, "Connection not found")
     config = json.loads(decrypt(conn.encrypted_config))
     loop = asyncio.get_event_loop()
