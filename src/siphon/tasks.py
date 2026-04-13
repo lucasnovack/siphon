@@ -119,3 +119,115 @@ async def _run_job_async(source, destination, job, db_factory) -> None:
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         await worker.run_job(source, destination, job, executor, job_timeout, db_factory=db_factory)
+
+
+def _purge_s3_files(
+    base_path: str,
+    before_date,
+    partition_filter: str | None,
+    list_fn=None,
+    delete_fn=None,
+) -> dict:
+    """List and delete Parquet files under base_path matching the given filters.
+
+    list_fn and delete_fn are injectable for testing. In production they use
+    PyArrow S3FileSystem.
+    """
+    import os
+
+    if list_fn is None:
+        def list_fn(path):
+            import pyarrow.fs as pafs
+            endpoint = os.getenv("SIPHON_S3_ENDPOINT", "http://minio:9000")
+            access_key = os.getenv("SIPHON_S3_ACCESS_KEY", "")
+            secret_key = os.getenv("SIPHON_S3_SECRET_KEY", "")
+            fs = pafs.S3FileSystem(
+                endpoint_override=endpoint,
+                access_key=access_key,
+                secret_key=secret_key,
+            )
+            bucket_path = path.removeprefix("s3://")
+            file_info = fs.get_file_info(pafs.FileSelector(bucket_path, recursive=True))
+            return [
+                "s3://" + f.path
+                for f in file_info
+                if f.is_file and f.path.endswith(".parquet")
+            ]
+
+    if delete_fn is None:
+        def delete_fn(path):
+            import pyarrow.fs as pafs2
+            fs = pafs2.S3FileSystem(
+                endpoint_override=os.getenv("SIPHON_S3_ENDPOINT", "http://minio:9000"),
+                access_key=os.getenv("SIPHON_S3_ACCESS_KEY", ""),
+                secret_key=os.getenv("SIPHON_S3_SECRET_KEY", ""),
+            )
+            info = fs.get_file_info(path.removeprefix("s3://"))
+            size = info.size or 0
+            fs.delete_file(path.removeprefix("s3://"))
+            return size
+
+    files = list_fn(base_path)
+
+    # Apply filters
+    if partition_filter:
+        files = [f for f in files if partition_filter in f]
+    if before_date:
+        date_str = str(before_date)  # "YYYY-MM-DD"
+        files = [f for f in files if date_str not in f or f < base_path + f"/_date={date_str}"]
+
+    total_bytes = 0
+    for f in files:
+        total_bytes += delete_fn(f)
+
+    return {"files_deleted": len(files), "bytes_deleted": total_bytes}
+
+
+@app.task(
+    bind=True,
+    name="siphon.tasks.purge_s3_data_task",
+    max_retries=2,
+    default_retry_delay=60,
+)
+def purge_s3_data_task(
+    self,
+    event_id: str,
+    base_path: str,
+    before_date_str: str | None,
+    partition_filter: str | None,
+    db_url: str,
+) -> None:
+    """Background Celery task: purge Parquet files and update gdpr_events row."""
+    from datetime import date as date_type
+
+    before_date = date_type.fromisoformat(before_date_str) if before_date_str else None
+
+    try:
+        result = _purge_s3_files(base_path, before_date, partition_filter)
+    except Exception as exc:
+        logger.error("S3 purge failed", event_id=event_id, error=str(exc))
+        raise self.retry(exc=exc)
+
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(_update_gdpr_event(event_id, result))
+    finally:
+        loop.close()
+
+
+async def _update_gdpr_event(event_id: str, result: dict) -> None:
+    """Mark the gdpr_events row as completed with file/byte counts."""
+    import uuid as uuid_mod
+    from datetime import UTC, datetime
+
+    from siphon.db import get_session_factory
+    from siphon.orm import GdprEvent
+
+    async with get_session_factory()() as session:
+        event = await session.get(GdprEvent, uuid_mod.UUID(event_id))
+        if event:
+            event.status = "completed"
+            event.files_deleted = result["files_deleted"]
+            event.bytes_deleted = result["bytes_deleted"]
+            event.completed_at = datetime.now(tz=UTC)
+            await session.commit()
