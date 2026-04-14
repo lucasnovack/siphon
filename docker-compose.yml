@@ -4,19 +4,16 @@ services:
     ports:
       - "8000:8000"
     environment:
-      SIPHON_PORT: "8000"
-      SIPHON_MAX_WORKERS: "4"
-      SIPHON_ALLOWED_S3_PREFIX: "bronze/"
-      SIPHON_S3_SCHEME: "http"
-      # PostgreSQL — required for UI, auth, pipelines and scheduling
-      DATABASE_URL: "postgresql+asyncpg://siphon:siphon@postgres:5432/siphon"
-      # Auth — change all three values before exposing to any network
-      SIPHON_JWT_SECRET: "dev-jwt-secret-change-in-production"
-      SIPHON_ENCRYPTION_KEY: "aMgwZ5VXJPcxLd3zoM510Dtb59-O6HhCUG8DhlZUiAo="
-      # Bootstrap admin (only used when no users exist in the database)
-      SIPHON_ADMIN_EMAIL: "admin@example.com"
-      SIPHON_ADMIN_PASSWORD: "changeme123"
-      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: ${DATABASE_URL}
+      SIPHON_JWT_SECRET: ${SIPHON_JWT_SECRET}
+      SIPHON_ENCRYPTION_KEY: ${SIPHON_ENCRYPTION_KEY}
+      SIPHON_ADMIN_EMAIL: ${SIPHON_ADMIN_EMAIL}
+      SIPHON_ADMIN_PASSWORD: ${SIPHON_ADMIN_PASSWORD}
+      REDIS_URL: ${REDIS_URL}
+      SIPHON_PORT: ${SIPHON_PORT}
+      SIPHON_MAX_WORKERS: ${SIPHON_MAX_WORKERS}
+      SIPHON_ALLOWED_S3_PREFIX: ${SIPHON_ALLOWED_S3_PREFIX}
+      SIPHON_S3_SCHEME: ${SIPHON_S3_SCHEME}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -51,7 +48,11 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       SIPHON_ENCRYPTION_KEY: ${SIPHON_ENCRYPTION_KEY}
-      REDIS_URL: redis://redis:6379/0
+      SIPHON_ALLOWED_S3_PREFIX: ${SIPHON_ALLOWED_S3_PREFIX}
+      SIPHON_S3_SCHEME: ${SIPHON_S3_SCHEME}
+      REDIS_URL: ${REDIS_URL}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       redis:
         condition: service_healthy
