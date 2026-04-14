@@ -1,58 +1,58 @@
-# testenv — Ambiente de testes local
+# testenv — Local test environment
 
-Serviços isolados para testar o Siphon end-to-end sem depender de infraestrutura externa. Completamente separados do stack principal — podem ser iniciados, pausados e destruídos de forma independente.
+Isolated services for end-to-end testing of Siphon without relying on external infrastructure. Completely separate from the main stack — they can be started, paused, and destroyed independently.
 
-| Serviço | Função | Porta |
-|---------|--------|-------|
-| MySQL 8.0 | Fonte de dados (source) | 3306 |
-| MinIO | Destino S3-compatível (destination) | 9010 / 9011 |
+| Service | Role | Port |
+|---------|------|-------|
+| MySQL 8.0 | Data source | 3306 |
+| MinIO | S3-compatible destination | 9010 / 9011 |
 
 ---
 
-## Estrutura
+## Structure
 
 ```
 testenv/
-├── docker-compose.yml   # MySQL 8.0 + MinIO, volumes nomeados
-├── mysql.sh             # Script de controle de ambos os serviços
+├── docker-compose.yml   # MySQL 8.0 + MinIO, named volumes
+├── mysql.sh             # Control script for both services
 └── init/
     ├── 01_schema.sql    # DDL: orders, customers, products, order_items
     └── 02_seed.sql      # 10 customers, 10 products, 15 orders, 25 order_items
 ```
 
-Os arquivos em `init/` são executados automaticamente pelo MySQL na **primeira vez** que o container sobe (quando o volume está vazio). Para re-executar do zero, use `destroy` e depois `start`.
+Files in `init/` are executed automatically by MySQL the **first time** the container starts (when the volume is empty). To start fresh, run `destroy` followed by `start`.
 
 ---
 
-## Comandos
+## Commands
 
 ```bash
-./testenv/mysql.sh start    # Sobe MySQL + MinIO e aguarda ficarem healthy
-./testenv/mysql.sh stop     # Para os containers (dados preservados nos volumes)
-./testenv/mysql.sh destroy  # Para + remove os volumes (pede confirmação)
-./testenv/mysql.sh shell    # Abre o MySQL CLI como usuário siphon
-./testenv/mysql.sh logs     # Acompanha os logs de todos os serviços
-./testenv/mysql.sh status   # Mostra estado dos containers
+./testenv/mysql.sh start    # Start MySQL + MinIO and wait for healthy status
+./testenv/mysql.sh stop     # Stop containers (data preserved in volumes)
+./testenv/mysql.sh destroy  # Stop + remove volumes (asks for confirmation)
+./testenv/mysql.sh shell    # Open MySQL CLI as the siphon user
+./testenv/mysql.sh logs     # Tail logs from all services
+./testenv/mysql.sh status   # Show container status
 ```
 
 ---
 
 ## MySQL (source)
 
-### Credenciais
+### Credentials
 
-| Campo    | Valor       |
+| Field    | Value       |
 |----------|-------------|
 | Host     | `localhost` |
-| Porta    | `3306`      |
+| Port     | `3306`      |
 | Database | `testdb`    |
-| Usuário  | `siphon`    |
-| Senha    | `siphon`    |
+| User     | `siphon`    |
+| Password | `siphon`    |
 | Root pw  | `root`      |
 
-### Connection string no Siphon
+### Connection string in Siphon
 
-> O Siphon roda dentro do Docker, então use `host.docker.internal` em vez de `localhost`.
+> Siphon runs inside Docker, so use `host.docker.internal` instead of `localhost`.
 
 ```
 mysql://siphon:siphon@host.docker.internal:3306/testdb
@@ -61,49 +61,49 @@ mysql://siphon:siphon@host.docker.internal:3306/testdb
 ### Schema
 
 #### `customers`
-| Coluna | Tipo | Descrição |
+| Column | Type | Description |
 |---|---|---|
 | `id` | INT PK | Auto increment |
-| `name` | VARCHAR(100) | Nome completo |
-| `email` | VARCHAR(150) | E-mail único |
-| `country` | CHAR(2) | Código do país |
-| `created_at` | DATETIME | Data de criação |
+| `name` | VARCHAR(100) | Full name |
+| `email` | VARCHAR(150) | Unique email |
+| `country` | CHAR(2) | Country code |
+| `created_at` | DATETIME | Creation timestamp |
 
 #### `products`
-| Coluna | Tipo | Descrição |
+| Column | Type | Description |
 |---|---|---|
 | `id` | INT PK | Auto increment |
-| `sku` | VARCHAR(50) | Código único do produto |
-| `name` | VARCHAR(150) | Nome do produto |
-| `price` | DECIMAL(10,2) | Preço unitário |
-| `stock` | INT | Quantidade em estoque |
-| `updated_at` | DATETIME | Atualizado via `ON UPDATE` |
+| `sku` | VARCHAR(50) | Unique product code |
+| `name` | VARCHAR(150) | Product name |
+| `price` | DECIMAL(10,2) | Unit price |
+| `stock` | INT | Stock quantity |
+| `updated_at` | DATETIME | Updated via `ON UPDATE` |
 
 #### `orders`
-| Coluna | Tipo | Descrição |
+| Column | Type | Description |
 |---|---|---|
 | `id` | INT PK | Auto increment |
-| `customer_id` | INT FK | Referência a `customers.id` |
+| `customer_id` | INT FK | Reference to `customers.id` |
 | `status` | VARCHAR(20) | `pending`, `completed`, `cancelled` |
-| `amount` | DECIMAL(10,2) | Valor total do pedido |
-| `currency` | CHAR(3) | Moeda (padrão: `BRL`) |
-| `created_at` | DATETIME | Data do pedido |
-| `updated_at` | DATETIME | Atualizado via `ON UPDATE` |
+| `amount` | DECIMAL(10,2) | Total order amount |
+| `currency` | CHAR(3) | Currency (default: `BRL`) |
+| `created_at` | DATETIME | Order timestamp |
+| `updated_at` | DATETIME | Updated via `ON UPDATE` |
 
 #### `order_items`
-| Coluna | Tipo | Descrição |
+| Column | Type | Description |
 |---|---|---|
 | `id` | INT PK | Auto increment |
-| `order_id` | INT FK | Referência a `orders.id` |
-| `product_id` | INT FK | Referência a `products.id` |
-| `quantity` | INT | Quantidade |
-| `unit_price` | DECIMAL(10,2) | Preço no momento da compra |
+| `order_id` | INT FK | Reference to `orders.id` |
+| `product_id` | INT FK | Reference to `products.id` |
+| `quantity` | INT | Quantity |
+| `unit_price` | DECIMAL(10,2) | Price at time of purchase |
 
-### Queries de exemplo
+### Example queries
 
 #### Full refresh
 ```sql
--- Pedidos com dados do cliente
+-- Orders with customer data
 SELECT
     o.id          AS order_id,
     o.status,
@@ -116,7 +116,7 @@ SELECT
 FROM orders o
 JOIN customers c ON c.id = o.customer_id
 
--- Itens com nome do produto
+-- Items with product name
 SELECT
     oi.order_id,
     p.sku,
@@ -128,9 +128,9 @@ FROM order_items oi
 JOIN products p ON p.id = oi.product_id
 ```
 
-#### Incremental (usando `updated_at`)
+#### Incremental (using `updated_at`)
 
-No Siphon, configure:
+In Siphon, configure:
 - **Extraction mode**: `incremental`
 - **Watermark column**: `updated_at`
 
@@ -138,67 +138,67 @@ No Siphon, configure:
 SELECT * FROM orders WHERE updated_at > '{{last_watermark}}'
 ```
 
-O Siphon substitui `{{last_watermark}}` pelo valor do último run bem-sucedido. Na primeira execução, extrai tudo.
+Siphon replaces `{{last_watermark}}` with the value from the last successful run. On the first run, all rows are extracted.
 
-#### Simular novos dados para testar incremental
+#### Simulate new data for incremental testing
 
-Acesse o shell com `./testenv/mysql.sh shell` e execute:
+Open a shell with `./testenv/mysql.sh shell` and run:
 
 ```sql
--- Atualiza um pedido (dispara updated_at automático)
+-- Update an order (triggers automatic updated_at)
 UPDATE orders SET status = 'completed' WHERE id = 4;
 
--- Insere novo pedido
+-- Insert a new order
 INSERT INTO orders (customer_id, status, amount, currency)
 VALUES (3, 'pending', 599.90, 'BRL');
 ```
 
-Na próxima execução incremental, somente essas linhas serão extraídas.
+On the next incremental run, only those rows will be extracted.
 
 ---
 
 ## MinIO (destination)
 
-MinIO é um object storage S3-compatível. Usado como destino dos pipelines no lugar do AWS S3.
+MinIO is an S3-compatible object store. Used as the pipeline destination in place of AWS S3.
 
-### Credenciais
+### Credentials
 
-| Campo      | Valor            |
+| Field      | Value            |
 |------------|------------------|
 | Endpoint   | `localhost:9010` |
 | Access Key | `minioadmin`     |
 | Secret Key | `minioadmin`     |
 | Console UI | http://localhost:9011 |
 
-### Connection no Siphon
+### Connection in Siphon
 
-> O Siphon roda dentro do Docker, então use `host.docker.internal` em vez de `localhost`.
+> Siphon runs inside Docker, so use `host.docker.internal` instead of `localhost`.
 
 - **Endpoint**: `host.docker.internal:9010`
 - **Access Key**: `minioadmin`
 - **Secret Key**: `minioadmin`
 
-O `docker-compose.yml` principal já define `SIPHON_S3_SCHEME=http`, então não é necessário TLS.
+The main `docker-compose.yml` already sets `SIPHON_S3_SCHEME=http`, so TLS is not required.
 
-### Criar um bucket antes de usar
+### Create a bucket before use
 
-O MinIO começa vazio. É necessário criar pelo menos um bucket antes de configurar um pipeline com destino S3.
+MinIO starts empty. You must create at least one bucket before configuring a pipeline with an S3 destination.
 
-**Via console web** (recomendado):
-1. Acesse http://localhost:9011
+**Via the web console** (recommended):
+1. Open http://localhost:9011
 2. Login: `minioadmin` / `minioadmin`
-3. Clique em **Buckets → Create Bucket**
-4. Nome sugerido: `bronze`
+3. Click **Buckets → Create Bucket**
+4. Suggested name: `bronze`
 
-**Via CLI** (dentro do container):
+**Via CLI** (inside the container):
 ```bash
 docker compose -f testenv/docker-compose.yml exec minio \
   sh -c "mc alias set local http://localhost:9000 minioadmin minioadmin && mc mb local/bronze"
 ```
 
-### S3 Prefix no pipeline
+### S3 prefix in the pipeline
 
-No wizard de criação de pipeline, o campo **S3 Prefix** define o caminho dentro do bucket onde os arquivos Parquet serão gravados. Exemplos:
+In the pipeline creation wizard, the **S3 Prefix** field sets the path inside the bucket where Parquet files will be written. Examples:
 
 ```
 bronze/orders/
@@ -206,14 +206,14 @@ bronze/customers/
 bronze/order_items/
 ```
 
-Os arquivos serão gravados como `bronze/orders/part-0.parquet`, etc.
+Files will be written as `bronze/orders/part-0.parquet`, etc.
 
 ---
 
-## Destruir tudo
+## Teardown
 
 ```bash
 ./testenv/mysql.sh destroy
 ```
 
-Remove os containers e os volumes Docker (`mysql_data` e `minio_data`). Não afeta nenhum outro serviço do Siphon. Para recriar do zero, basta rodar `start` novamente.
+Removes the containers and Docker volumes (`mysql_data` and `minio_data`). Does not affect any other Siphon services. To recreate from scratch, simply run `start` again.
