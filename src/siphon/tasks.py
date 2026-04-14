@@ -41,44 +41,16 @@ def _job_from_dict(d: dict) -> Job:
     default_retry_delay=30,
 )
 def run_pipeline_task(self, job_dict: dict, source_dict: dict, destination_dict: dict) -> None:
-    """Celery task: reconstruct Job + plugins, call run_job(), persist result."""
-    # NOTE: asyncio.new_event_loop() is used here because Celery tasks are synchronous.
-    # This is only compatible with Celery's prefork (default) worker pool.
-    # Do NOT run with gevent or eventlet pools — they monkey-patch asyncio and will deadlock.
+    """Celery task: reconstruct Job + plugins, call run_job(), persist result.
+
+    Uses a single asyncio.run() call with a fresh engine per task to avoid
+    event loop / connection pool conflicts in Celery prefork workers.
+    """
     from siphon.plugins.destinations import get as get_destination
     from siphon.plugins.sources import get as get_source
 
     job = _job_from_dict(job_dict)
     structlog.contextvars.bind_contextvars(job_id=job.job_id, pipeline_id=job.pipeline_id)
-
-    # Update job status to "running" in DB
-    import asyncio as _asyncio
-
-    from sqlalchemy import select
-
-    from siphon.db import get_session_factory
-    from siphon.orm import JobRun
-
-    async def _mark_running():
-        db_factory = get_session_factory()
-        async with db_factory() as session:
-            result = await session.execute(
-                select(JobRun).where(JobRun.job_id == job.job_id).order_by(JobRun.id.desc()).limit(1)
-            )
-            run = result.scalar_one_or_none()
-            if run and run.status == "queued":
-                from datetime import UTC, datetime
-                run.status = "running"
-                run.started_at = datetime.now(UTC)
-                await session.commit()
-
-    _mark_running_loop = _asyncio.new_event_loop()
-    try:
-        _mark_running_loop.run_until_complete(_mark_running())
-    except Exception:
-        pass  # best-effort — don't fail the task if status update fails
-    finally:
-        _mark_running_loop.close()
 
     source_dict = dict(source_dict)
     destination_dict = dict(destination_dict)
@@ -95,30 +67,61 @@ def run_pipeline_task(self, job_dict: dict, source_dict: dict, destination_dict:
     source = source_cls(**source_dict)
     destination = dest_cls(**destination_dict, job_id=job.job_id)
 
-    loop = asyncio.new_event_loop()
     try:
-        loop.run_until_complete(
-            _run_job_async(source, destination, job, get_session_factory())
-        )
+        asyncio.run(_run_job_async(source, destination, job))
     except Exception as exc:
         logger.error("Task failed, retrying", error=str(exc))
         raise self.retry(exc=exc) from exc
-    finally:
-        loop.close()
 
 
-async def _run_job_async(source, destination, job, db_factory) -> None:
-    """Async wrapper so run_job (which is async) can be called from a sync Celery task."""
+async def _run_job_async(source, destination, job) -> None:
+    """Async wrapper: creates a fresh DB engine per task, runs the job, disposes engine.
+
+    A fresh engine is required because Celery prefork workers share module state
+    across tasks. Reusing an engine whose connection pool was bound to a previous
+    event loop causes 'Future attached to a different loop' errors.
+    """
     import os
     from concurrent.futures import ThreadPoolExecutor
+    from datetime import UTC, datetime
 
-    max_workers = int(os.getenv("SIPHON_MAX_WORKERS", "1"))
-    job_timeout = int(os.getenv("SIPHON_JOB_TIMEOUT", "3600"))
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
     from siphon import worker
+    from siphon.orm import JobRun
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        await worker.run_job(source, destination, job, executor, job_timeout, db_factory=db_factory)
+    db_url = os.getenv("DATABASE_URL")
+    engine = create_async_engine(db_url, pool_pre_ping=True) if db_url else None
+    db_factory = async_sessionmaker(engine, expire_on_commit=False) if engine else None
+
+    try:
+        # Mark job as running
+        if db_factory:
+            try:
+                async with db_factory() as session:
+                    result = await session.execute(
+                        select(JobRun)
+                        .where(JobRun.job_id == job.job_id)
+                        .order_by(JobRun.id.desc())
+                        .limit(1)
+                    )
+                    run = result.scalar_one_or_none()
+                    if run and run.status == "queued":
+                        run.status = "running"
+                        run.started_at = datetime.now(UTC)
+                        await session.commit()
+            except Exception:
+                pass  # best-effort — don't abort the job if status update fails
+
+        max_workers = int(os.getenv("SIPHON_MAX_WORKERS", "1"))
+        job_timeout = int(os.getenv("SIPHON_JOB_TIMEOUT", "3600"))
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            await worker.run_job(source, destination, job, executor, job_timeout, db_factory=db_factory)
+    finally:
+        if engine:
+            await engine.dispose()
 
 
 def _purge_s3_files(
