@@ -169,46 +169,45 @@ Cada fase termina com testes passando e código funcional antes de avançar.
 
 ---
 
-## Fase 15 — Cleanup + Performance 🔜
+## Fase 15 — Cleanup + Performance ✅
 
 **Objetivo:** remover destinos não-Parquet, adicionar concurrency limits por conexão e priorização de jobs.
 
-- [ ] Remover `bigquery_dest.py`, `snowflake_dest.py`, modelos e testes associados
-- [ ] `max_concurrent_jobs` em `Connection` — limita jobs simultâneos por fonte (migration 008)
-- [ ] Worker verifica concorrência antes de iniciar; requeueia com backoff se no limite
-- [ ] `httpx.AsyncClient` singleton em `HTTPRestSource` (reuso de conexão)
-- [ ] `priority` enum (`low/normal/high`) em `pipelines` (migration 009)
-- [ ] Substituir `asyncio.Queue` por `asyncio.PriorityQueue` em `queue.py`
-- [ ] Frontend: campo `priority` no PipelineWizard e PipelineEditPage; `max_concurrent_jobs` no ConnectionForm
+- [x] Remover `bigquery_dest.py`, `snowflake_dest.py`, modelos e testes associados
+- [x] `max_concurrent_jobs` em `Connection` — limita jobs simultâneos por fonte (migration 008)
+- [x] Worker verifica concorrência antes de iniciar; requeueia com backoff se no limite
+- [x] `priority` enum (`low/normal/high`) em `pipelines` (migration 009)
+- [x] Substituir `asyncio.Queue` por `asyncio.PriorityQueue` em `queue.py`
+- [x] Frontend: campo `priority` no PipelineWizard e PipelineEditPage; `max_concurrent_jobs` no ConnectionForm
 
 ---
 
-## Fase 16 — Celery + Redis (Escala horizontal) 🔜
+## Fase 16 — Celery + Redis (Escala horizontal) ✅
 
 **Objetivo:** desacoplar API e workers; múltiplos pods de worker consumindo a mesma fila.
 
-- [ ] `celery_app.py` — Celery configurado com Redis broker/backend, filas `high/normal/low`
-- [ ] `tasks.py` — `@celery_app.task run_pipeline_task(job_dict)` chamando `run_job()` existente
-- [ ] Estado de jobs migra de `_jobs` in-memory para `job_runs` no PostgreSQL
-- [ ] `GET /jobs/{id}` lê do DB; cancel via `celery revoke(terminate=True)`
-- [ ] `queue.py` vira wrapper fino: `enqueue()` → `apply_async(queue=priority)`
-- [ ] Concorrência por conexão lê de `job_runs WHERE status='running'` (sem dict in-memory)
-- [ ] `docker-compose.yml`: adicionar `redis:7-alpine` + `siphon-worker`
-- [ ] Graceful drain: `task_acks_late=True`, `worker_prefetch_multiplier=1`
+- [x] `celery_app.py` — Celery configurado com Redis broker/backend, filas `high/normal/low`
+- [x] `tasks.py` — `@celery_app.task run_pipeline_task(job_dict)` chamando `run_job()` existente
+- [x] Estado de jobs migra de `_jobs` in-memory para `job_runs` no PostgreSQL
+- [x] `GET /jobs/{id}` lê do DB; cancel via `celery revoke(terminate=True)`
+- [x] `queue.py` vira wrapper fino: `enqueue()` → `apply_async(queue=priority)`
+- [x] Concorrência por conexão lê de `job_runs WHERE status='running'` (sem dict in-memory)
+- [x] `docker-compose.yml`: adicionar `redis:7-alpine` + `siphon-worker`
+- [x] Graceful drain: `task_acks_late=True`, `worker_prefetch_multiplier=1`
 
 ---
 
-## Fase 17 — GDPR Compliance 🔜
+## Fase 17 — GDPR Compliance ✅
 
 **Objetivo:** soft delete em todas as entidades + API de purge de dados no S3.
 
-- [ ] `deleted_at TIMESTAMPTZ` nullable em `connections`, `pipelines`, `schedules`, `users` (migration 010)
-- [ ] Todos os `GET` filtram `WHERE deleted_at IS NULL`; `DELETE` seta `deleted_at = now()`
-- [ ] Cascade: soft-delete de connection → soft-delete pipelines + remove schedules Celery
-- [ ] `DELETE /api/v1/pipelines/{id}/data` — purge S3 com params `?before=date&partition=val` (admin-only)
-- [ ] Purge síncrono (<1000 arquivos) ou background Celery task (≥1000, retorna 202)
-- [ ] Tabela `gdpr_events` + migration 011: registra cada purge com arquivos/bytes deletados
-- [ ] `GET /api/v1/gdpr/events` e `GET /api/v1/gdpr/events/{id}` (admin-only)
+- [x] `deleted_at TIMESTAMPTZ` nullable em `connections`, `pipelines`, `schedules`, `users` (migration 010)
+- [x] Todos os `GET` filtram `WHERE deleted_at IS NULL`; `DELETE` seta `deleted_at = now()`
+- [x] Cascade: soft-delete de connection → soft-delete pipelines + remove schedules Celery
+- [x] `DELETE /api/v1/pipelines/{id}/data` — purge S3 com params `?before=date&partition=val` (admin-only)
+- [x] Purge síncrono (<1000 arquivos) ou background Celery task (≥1000, retorna 202)
+- [x] Tabela `gdpr_events` + migration 011: registra cada purge com arquivos/bytes deletados
+- [x] `GET /api/v1/gdpr/events` e `GET /api/v1/gdpr/events/{id}` (admin-only)
 
 ---
 

@@ -6,12 +6,15 @@ A lightweight, self-hosted data pipeline platform that replaces Apache Spark in 
 Connections Registry
         │
         ▼
-Pipeline (source + dest + schedule + DQ)
+Pipeline (source + dest + schedule + DQ + priority)
         │
         ├─── APScheduler (cron, advisory lock) ───► trigger
         └─── POST /trigger (manual) ──────────────► trigger
                                                         │
-                                              Worker (ThreadPool)
+                                              Celery (Redis broker)
+                                              queues: high / normal / low
+                                                        │
+                                           Celery Worker (siphon-worker)
                                                         │
                                           source.extract_batches()
                                                         │
@@ -82,7 +85,7 @@ cd siphon
 docker compose up -d
 ```
 
-Wait ~20 seconds for all services to start (PostgreSQL, MinIO, Siphon). Siphon automatically runs database migrations on first boot.
+Wait ~20 seconds for all services to start (PostgreSQL, Redis, MinIO, Siphon API, Siphon Worker). Siphon automatically runs database migrations on first boot.
 
 ```bash
 # 2. Check that everything is up
@@ -221,11 +224,14 @@ curl -s "http://localhost:8000/api/v1/runs?pipeline_id=<pipeline-id>" \
 
 **Key design decisions:**
 
-- Jobs run in a `ThreadPoolExecutor` — blocking I/O (DB drivers, SFTP) never blocks the event loop.
+- Jobs are dispatched to Celery workers via Redis — API and workers are fully decoupled; multiple worker pods can consume the same queues without coordination.
+- Three priority queues (`high/normal/low`) map to the `priority` field on each pipeline — high-priority jobs are never blocked behind large low-priority ones.
 - Sources implement `extract_batches()` — a generator yielding `pa.Table` chunks. Memory stays bounded regardless of table size.
 - When data quality rules are active, batches are buffered, checked in full, then written or rejected atomically.
-- `_persist_job_run` does an UPDATE when a pre-created `job_runs` row exists (trigger path), or INSERT otherwise (legacy path) — never creates duplicates.
+- `job_runs` in PostgreSQL is the single source of truth for job state — `GET /jobs/{id}` reads from DB; cancel via `celery revoke`.
 - APScheduler uses `pg_try_advisory_xact_lock` before each fire — safe for multi-pod / rolling deploys without Recreate strategy.
+- Connections support `max_concurrent_jobs` — the worker checks active runs in `job_runs` before starting; requeues with backoff if at the limit.
+- Soft delete (`deleted_at`) on all entities ensures GDPR compliance; `DELETE /api/v1/pipelines/{id}/data` triggers a verified S3 purge logged in `gdpr_events`.
 
 ---
 
@@ -456,10 +462,7 @@ Returns Prometheus text format:
 |---|---|---|
 | `SIPHON_API_KEY` | *(unset)* | Legacy API key. If unset, API key auth is disabled and a warning is logged at startup. |
 | `SIPHON_PORT` | `8000` | HTTP port |
-| `SIPHON_MAX_WORKERS` | `10` | ThreadPoolExecutor max workers |
-| `SIPHON_MAX_QUEUE` | `50` | Max pending jobs before 429 |
 | `SIPHON_JOB_TIMEOUT` | `3600` | Per-job timeout in seconds |
-| `SIPHON_JOB_TTL_SECONDS` | `3600` | How long finished jobs stay in memory |
 | `SIPHON_MAX_REQUEST_SIZE_MB` | `1` | Request body size limit |
 | `SIPHON_ALLOWED_HOSTS` | *(all)* | Comma-separated hostnames or CIDRs for SSRF guard |
 | `SIPHON_ALLOWED_S3_PREFIX` | *(all)* | Required path prefix for S3 writes |
@@ -469,6 +472,12 @@ Returns Prometheus text format:
 | `SIPHON_SFTP_HOST_KEY` | *(unset)* | Base64-encoded host public key |
 | `SIPHON_ENABLE_SYNC_EXTRACT` | `false` | Enable `POST /extract` (dev only) |
 | `SIPHON_DRAIN_TIMEOUT` | `3600` | Seconds to wait for active jobs on SIGTERM |
+
+**Celery + Redis**
+
+| Variable | Default | Description |
+|---|---|---|
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection URL for Celery broker and backend. **Required** for worker pod. |
 
 **PostgreSQL + Auth**
 
@@ -634,7 +643,7 @@ After each extraction, Siphon computes a SHA-256 hash of the Arrow schema (field
 - The write proceeds normally — the schema change **never blocks** extraction
 - `pipelines.last_schema_hash` is updated after the run
 
-Engineers can query `SELECT * FROM job_runs WHERE schema_changed = true ORDER BY created_at DESC` to audit drift, or watch for the badge in the upcoming UI (Phase 10).
+Engineers can query `SELECT * FROM job_runs WHERE schema_changed = true ORDER BY created_at DESC` to audit drift, or watch for the schema drift badge in the UI (Runs page).
 
 ---
 
@@ -866,11 +875,13 @@ docker build -t siphon:dev .
 ```
 src/siphon/
 ├── main.py                    # FastAPI app, routers, lifespan, metrics endpoint
-├── queue.py                   # Asyncio job queue + ThreadPoolExecutor
+├── queue.py                   # Celery enqueue wrapper (priority → apply_async)
 ├── worker.py                  # Extraction loop: extract → DQ → schema hash → write → persist
+├── celery_app.py              # Celery app configured with Redis broker/backend, queues high/normal/low
+├── tasks.py                   # @celery_app.task run_pipeline_task
 ├── models.py                  # Pydantic models (Job, ExtractRequest, JobStatus, …)
 ├── variables.py               # @TODAY, @LAST_MONTH, etc.
-├── orm.py                     # SQLAlchemy: User, Connection, Pipeline, Schedule, JobRun, RefreshToken
+├── orm.py                     # SQLAlchemy: User, Connection, Pipeline, Schedule, JobRun, RefreshToken, GdprEvent
 ├── db.py                      # Async engine, session factory, get_db dependency
 ├── crypto.py                  # Fernet encrypt/decrypt (SIPHON_ENCRYPTION_KEY)
 ├── metrics.py                 # Prometheus counters/histograms
@@ -884,20 +895,31 @@ src/siphon/
 ├── connections/
 │   └── router.py              # CRUD + /test + /types
 ├── pipelines/
-│   ├── router.py              # CRUD + /trigger + /runs + schedule sync
+│   ├── router.py              # CRUD + /trigger + /runs + schedule sync + /data purge
 │   └── watermark.py           # inject_watermark() + _cast_for_dialect()
 ├── preview/
 │   └── router.py              # POST /api/v1/preview (LIMIT 100, SSRF guard)
 ├── runs/
 │   └── router.py              # List, logs cursor, cancel
+├── gdpr/
+│   └── router.py              # GET /api/v1/gdpr/events (admin-only audit log)
 └── plugins/
-    ├── sources/               # sql.py (ConnectorX + oracledb), sftp.py
+    ├── sources/               # sql.py (ConnectorX + oracledb), sftp.py, http_rest.py
     ├── destinations/          # s3_parquet.py
-    └── parsers/               # example_parser.py (stub)
+    └── parsers/               # csv_parser.py, json_parser.py, avro_parser.py
 
 alembic/versions/
 ├── 001_initial_schema.py      # users, connections, pipelines, schedules, job_runs, refresh_tokens
-└── 002_add_dest_connection_triggered_by.py
+├── 002_add_dest_connection_triggered_by.py
+├── 003_add_pii_columns.py
+├── 004_add_webhook_sla.py
+├── 005_add_partition_by.py
+├── 006_add_schema_registry.py
+├── 007_add_lineage_to_job_runs.py
+├── 008_add_connection_concurrency.py
+├── 009_add_pipeline_priority.py
+├── 010_add_soft_delete.py
+└── 011_add_gdpr_events.py
 ```
 
 ---
@@ -910,10 +932,16 @@ alembic/versions/
 | 7 | ✅ | Hotfixes: TTL eviction, SFTP atomic moves, `/extract` guard |
 | 7.5 | ✅ | Oracle cursor streaming (no pandas, oracledb native fetchmany) |
 | 8 | ✅ | PostgreSQL persistence + JWT auth + token rotation + user management |
-| **9** | ✅ | **Connections + Pipelines API, APScheduler, incremental watermarks, DQ, schema evolution, preview, runs, Prometheus** |
-| **10** | ✅ | **React UI: pipeline wizard, query editor (CodeMirror), run history, schema drift badge, settings** |
-| 11 | ⏳ | Kubernetes manifests (deployment, service, HPA) |
-| 12 | ⏳ | Airflow SiphonOperator package |
+| 9 | ✅ | Connections + Pipelines API, APScheduler, incremental watermarks, DQ, schema evolution, preview, runs, Prometheus |
+| 10 | ✅ | React UI: pipeline wizard, query editor (CodeMirror), run history, schema drift badge, settings |
+| 10.5 | ✅ | Security hardening: 19 vulnerabilities fixed (SQL injection, path traversal, auth gaps) |
+| 11 | ✅ | Retry with backoff, CSV/JSON/Avro parsers, PII masking, generalised S3 staging |
+| 12 | ✅ | Backfill API, Hive-style partitioning, webhook alerts, SLA enforcement |
+| 13 | ✅ | HTTP/REST source (Bearer/OAuth2/API key, cursor/page/offset pagination) |
+| 14 | ✅ | structlog + OpenTelemetry, schema registry (JSONB), data lineage in job_runs |
+| 15 | ✅ | Priority queue (high/normal/low), per-connection concurrency limit, removed BigQuery/Snowflake |
+| 16 | ✅ | Celery + Redis: distributed workers, horizontal scaling, job state in PostgreSQL |
+| 17 | ✅ | GDPR: soft delete on all entities, S3 purge API, gdpr_events audit log |
 
 ---
 

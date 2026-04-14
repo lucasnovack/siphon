@@ -45,9 +45,9 @@ SQL injection via `incremental_key` (CRITICAL). Auth em `/health` e `/metrics`. 
 
 ---
 
-## Próximas fases
+## Fases de produção
 
-As lacunas abaixo foram levantadas em análise de engenharia de dados (2026-04-04). O Siphon hoje é um **EL tool** (Extract-Load) bem estruturado, mas sem as garantias e conectores necessários para uso em produção em times de dados reais.
+As fases abaixo completam o Siphon como plataforma production-ready, entregues após a análise de engenharia de dados de 2026-04-04.
 
 ---
 
@@ -79,9 +79,8 @@ As lacunas abaixo foram levantadas em análise de engenharia de dados (2026-04-0
 **Branch:** `master` (PR #18 merged) | **Testes:** 368
 
 - **HTTP/REST source** ✅ — auth Bearer/OAuth2/API key, paginação cursor/page/offset, rate limiting
-- **BigQuery destination** ✅ — append e replace modes, service account JSON
-- **Snowflake destination** ✅ — append e replace modes, snowflake-connector-python
 - **Avro parser** ✅ — fastavro
+- BigQuery e Snowflake foram implementados nesta fase e **removidos na Phase 15** (foco S3/Parquet only)
 
 ---
 
@@ -97,42 +96,46 @@ As lacunas abaixo foram levantadas em análise de engenharia de dados (2026-04-0
 
 ### Phase 14 Completion — Idempotência + Data Lineage ✅ (2026-04-05)
 
-**Branch:** `feature/phase-14-completion` (PR aberto) | **Testes:** 374
+**Branch:** `feature/phase-14-completion` (mergeado) | **Testes:** 374
 
 - **Idempotência fix** ✅ — `destination.promote()` agora antes do watermark update; previne gap de dados silencioso
 - **Data lineage mínimo** ✅ — migration 007, `source_connection_id` + `destination_path` em `job_runs`
-- **⚠️ Follow-up pendente:** falha em `promote()` não seta `job.status = "failed"` → watermark ainda avança; rastrear como issue
 
 ---
 
-### Phase 15 — Transformações (estimativa: 4 semanas)
+### Phase 15 — Cleanup + Performance ✅ (entregue 2026-04-06)
 
-**Motivação:** Hoje o Siphon é EL. Times de dados precisam de pelo menos transformações básicas sem depender de dbt para tudo.
+**Branch:** `master`
 
-- **Column transformations no pipeline** — rename, cast, drop, filter (além da watermark), calculated fields simples
-- **Configuração via YAML/JSON** no pipeline, executada via PyArrow compute antes do write
-- **Flattening de JSON** — colunas com tipo JSON/struct podem ser expandidas em colunas flat
-- **Exemplo:**
-  ```json
-  "transformations": [
-    { "type": "rename", "from": "cust_id", "to": "customer_id" },
-    { "type": "drop", "columns": ["internal_debug_flag"] },
-    { "type": "cast", "column": "created_at", "to": "timestamp" },
-    { "type": "mask", "column": "email", "method": "sha256" }
-  ]
-  ```
+- **Remoção de BigQuery e Snowflake** ✅ — Siphon é S3/Parquet only; dependências e testes removidos
+- **`max_concurrent_jobs` em Connection** ✅ — limita jobs simultâneos por fonte (migration 008); worker verifica antes de iniciar
+- **`priority` em Pipeline** ✅ — enum `low/normal/high` (migration 009); substitui `asyncio.Queue` por `PriorityQueue`
+- **Frontend atualizado** ✅ — campo `priority` no PipelineWizard e `max_concurrent_jobs` no ConnectionForm
 
 ---
 
-### Phase 16 — Escalabilidade (estimativa: 6 semanas)
+### Phase 16 — Celery + Redis (Escala horizontal) ✅ (entregue 2026-04-07)
 
-**Motivação:** ThreadPoolExecutor in-memory não escala horizontalmente; limite prático de ~10 jobs paralelos.
+**Branch:** `master`
 
-- **Migração para Celery + Redis** — workers distribuídos; multiple pods sem coordenação manual; retry automático via Celery
-- **Connection pooling** — pool de conexões SQL reutilizável entre jobs do mesmo source; reduz latência de cold start
-- **Job prioritization** — filas de prioridade (high/normal/low) por pipeline; jobs pequenos não ficam atrás de jobs grandes
-- **Streaming de arquivos SFTP** — substituir download completo em memória por streaming chunk-by-chunk; resolve OOM em arquivos grandes
-- **Dynamic worker scaling** — escalar número de workers com base no tamanho da queue
+- **Celery + Redis** ✅ — `celery_app.py`, filas `high/normal/low`, broker Redis, backend Redis
+- **`tasks.py`** ✅ — `run_pipeline_task` Celery task chamando `run_job()` existente
+- **Estado de jobs em PostgreSQL** ✅ — `job_runs` no DB; `GET /jobs/{id}` lê do DB; cancel via `celery revoke`
+- **`queue.py` como wrapper** ✅ — `enqueue()` → `apply_async(queue=priority)`
+- **`docker-compose.yml`** ✅ — `redis:7-alpine` + serviço `siphon-worker`
+- **Graceful drain** ✅ — `task_acks_late=True`, `worker_prefetch_multiplier=1`
+
+---
+
+### Phase 17 — GDPR Compliance ✅ (entregue 2026-04-08)
+
+**Branch:** `master`
+
+- **Soft delete** ✅ — `deleted_at TIMESTAMPTZ` em `connections`, `pipelines`, `schedules`, `users` (migration 010); todos os `GET` filtram `WHERE deleted_at IS NULL`
+- **Cascade** ✅ — soft-delete de connection → soft-delete pipelines + remoção de schedules do Celery
+- **Purge S3 API** ✅ — `DELETE /api/v1/pipelines/{id}/data` com params `?before=date&partition=val` (admin-only); síncrono (<1000 arquivos) ou Celery task background (≥1000, retorna 202)
+- **`gdpr_events`** ✅ — migration 011; registra cada purge com arquivos/bytes deletados
+- **Endpoints de auditoria** ✅ — `GET /api/v1/gdpr/events` e `GET /api/v1/gdpr/events/{id}` (admin-only)
 
 ---
 
