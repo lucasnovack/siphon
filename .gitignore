@@ -9,6 +9,10 @@ dist/
 .env
 .superpowers/
 .worktrees/
+.claude/
+claude.md
+docs/plans/
+docs/specs/
 docs/superpowers/
 memory/
 debug.ipynb
