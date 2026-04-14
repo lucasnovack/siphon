@@ -1,5 +1,7 @@
 # Siphon
 
+> **Status: Alpha** — under active development, not production-ready. APIs may change without notice.
+
 A lightweight, self-hosted data pipeline platform that replaces Apache Spark in the Bronze layer of a medallion architecture. Siphon handles the full lifecycle of extraction pipelines: connection registry, scheduling, incremental watermarks, data quality checks, schema evolution detection, and Parquet writes to S3-compatible storage.
 
 **Why not Spark?** A typical Bronze job is three lines: read SQL, write Parquet. For that, Spark adds 30–60s of cold-start, 2 GB of memory, and a JVM-based image — 200 times the overhead. Siphon does the same job in under 5 seconds with ~200 MB of RAM.
