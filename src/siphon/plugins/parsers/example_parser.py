@@ -1,3 +1,10 @@
+"""Development example parser — NOT for production use.
+
+This module is intentionally excluded from the production parser registry.
+To create a real parser, copy this file, implement parse(), and add
+@register("<your_format>") back.
+"""
+
 import pyarrow as pa
 
 from siphon.plugins.parsers import register

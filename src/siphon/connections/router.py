@@ -5,10 +5,13 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = structlog.get_logger(__name__)
 
 from siphon.auth.deps import Principal, get_current_principal
 from siphon.auth.router import limiter
@@ -94,7 +97,7 @@ async def create_connection(
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ) -> ConnectionResponse:
     principal.require_admin()
-    result = await db.execute(select(Connection).where(Connection.name == body.name))
+    result = await db.execute(select(Connection).where(Connection.name == body.name, Connection.deleted_at.is_(None)))
     if result.scalar_one_or_none():
         raise HTTPException(409, f"Connection '{body.name}' already exists")
     now = datetime.now(tz=UTC)
@@ -124,15 +127,17 @@ async def get_connection_types(
 async def test_connection_unsaved(
     request: Request,
     body: ConnectionTestRequest,
-    _: Principal = Depends(get_current_principal),  # noqa: B008
+    principal: Principal = Depends(get_current_principal),  # noqa: B008
 ) -> dict:
+    principal.require_admin()
     import time
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     t0 = time.monotonic()
     try:
         await loop.run_in_executor(None, _test_connection, body.type, body.config)
     except Exception as exc:
-        raise HTTPException(400, f"Connection test failed: {exc}") from exc
+        logger.warning("connection_test_failed", error=str(exc))
+        raise HTTPException(400, "Connection test failed — check server logs") from exc
     return {"ok": True, "latency_ms": round((time.monotonic() - t0) * 1000)}
 
 
@@ -241,11 +246,12 @@ async def test_connection(
     if conn is None or conn.deleted_at is not None:
         raise HTTPException(404, "Connection not found")
     config = json.loads(decrypt(conn.encrypted_config))
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         await loop.run_in_executor(None, _test_connection, conn.conn_type, config)
     except Exception as exc:
-        raise HTTPException(400, f"Connection test failed: {exc}") from exc
+        logger.warning("connection_test_failed", error=str(exc))
+        raise HTTPException(400, "Connection test failed — check server logs") from exc
     return {"status": "ok"}
 
 

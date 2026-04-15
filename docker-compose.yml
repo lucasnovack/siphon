@@ -65,7 +65,7 @@ services:
     environment:
       POSTGRES_DB: siphon
       POSTGRES_USER: siphon
-      POSTGRES_PASSWORD: siphon
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
       - "5432:5432"
     volumes:

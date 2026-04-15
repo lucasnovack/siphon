@@ -4,6 +4,7 @@ import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from urllib.parse import urlparse
 
 import structlog
 from opentelemetry import trace as _otel_trace
@@ -11,6 +12,7 @@ from opentelemetry import trace as _otel_trace
 from siphon.models import Job
 from siphon.plugins.destinations.base import Destination
 from siphon.plugins.sources.base import Source
+from siphon.plugins.sources.sql import _validate_host
 
 logger = structlog.get_logger()
 _tracer = _otel_trace.get_tracer("siphon.worker")
@@ -140,6 +142,11 @@ def _fire_webhook(url: str, payload: dict) -> None:
     Failures are logged but never propagated — a broken webhook must not
     affect the job result or the caller's control flow.
     """
+    try:
+        _validate_host(urlparse(url).hostname)
+    except Exception:
+        logger.warning("webhook_host_blocked", url=url)
+        return
     try:
         import httpx
         httpx.post(url, json=payload, timeout=5)
