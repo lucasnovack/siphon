@@ -212,7 +212,7 @@ async def create_pipeline(
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ) -> PipelineResponse:
     principal.require_admin()
-    result = await db.execute(select(Pipeline).where(Pipeline.name == body.name))
+    result = await db.execute(select(Pipeline).where(Pipeline.name == body.name, Pipeline.deleted_at.is_(None)))
     if result.scalar_one_or_none():
         raise HTTPException(409, f"Pipeline '{body.name}' already exists")
     now = datetime.now(tz=UTC)
@@ -450,7 +450,8 @@ async def trigger_pipeline(
     try:
         req = ExtractRequest(**{"source": source_payload, "destination": dest_payload})
     except Exception as exc:
-        raise HTTPException(400, f"Invalid pipeline config: {exc}") from exc
+        logger.warning("pipeline_config_invalid", error=str(exc))
+        raise HTTPException(400, "Operation failed — check server logs") from exc
 
     has_dq = p.min_rows_expected is not None or p.max_rows_drop_pct is not None
     job = Job(
@@ -478,7 +479,8 @@ async def trigger_pipeline(
         get_source(req.source.type)
         get_destination(req.destination.type)
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        logger.warning("pipeline_plugin_lookup_failed", error=str(exc))
+        raise HTTPException(400, "Operation failed — check server logs") from exc
 
     # Create the job_run row first so worker can UPDATE it instead of INSERT
     now = datetime.now(tz=UTC)

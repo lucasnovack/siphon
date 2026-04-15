@@ -8,16 +8,25 @@ from datetime import UTC, datetime, timedelta
 import jwt as pyjwt
 from passlib.context import CryptContext
 
+import structlog as _structlog
+
 _JWT_SECRET_DEFAULT = "dev-secret-change-in-production"
 _JWT_SECRET: str = os.getenv("SIPHON_JWT_SECRET", _JWT_SECRET_DEFAULT)
+_DEV_MODE = os.getenv("SIPHON_DEV_MODE", "false").lower() == "true"
 
-if _JWT_SECRET == _JWT_SECRET_DEFAULT and os.getenv("SIPHON_DEV_MODE", "").lower() != "true":
-    import structlog as _structlog
-    _structlog.get_logger().critical(
-        "SIPHON_JWT_SECRET is not set — all JWT tokens are signed with a publicly known default "
-        "secret and can be forged by anyone. Set SIPHON_JWT_SECRET to a cryptographically random "
-        "value before deploying. To suppress this in local dev, set SIPHON_DEV_MODE=true."
-    )
+def validate_jwt_secret() -> None:
+    """Call at application startup to enforce a strong JWT secret."""
+    if _JWT_SECRET == _JWT_SECRET_DEFAULT:
+        if _DEV_MODE:
+            _structlog.get_logger().critical(
+                "jwt_weak_secret_dev_mode",
+                warning="Using default JWT secret — never use in production",
+            )
+        else:
+            raise RuntimeError(
+                "SIPHON_JWT_SECRET is not set or uses the default value. "
+                "Set a strong secret or enable SIPHON_DEV_MODE=true for development."
+            )
 _ALGORITHM = "HS256"
 _DEFAULT_ACCESS_EXPIRE_MINUTES = 15
 _REFRESH_TOKEN_EXPIRE_DAYS = 7

@@ -1,7 +1,7 @@
 # src/siphon/tasks.py
 import asyncio
 import dataclasses
-from datetime import datetime
+from datetime import UTC, datetime
 
 import structlog
 
@@ -176,8 +176,17 @@ def _purge_s3_files(
     if partition_filter:
         files = [f for f in files if partition_filter in f]
     if before_date:
-        date_str = str(before_date)  # "YYYY-MM-DD"
-        files = [f for f in files if date_str not in f or f < base_path + f"/_date={date_str}"]
+        import re
+        _date_re = re.compile(r'_date=(\d{4}-\d{2}-\d{2})')
+        from datetime import date as _date_type
+
+        def _file_before_date(path: str) -> bool:
+            m = _date_re.search(path)
+            if not m:
+                return False  # skip files without a date partition
+            return _date_type.fromisoformat(m.group(1)) < before_date
+
+        files = [f for f in files if _file_before_date(f)]
 
     total_bytes = 0
     for f in files:
@@ -198,7 +207,6 @@ def purge_s3_data_task(
     base_path: str,
     before_date_str: str | None,
     partition_filter: str | None,
-    db_url: str,
 ) -> None:
     """Background Celery task: purge Parquet files and update gdpr_events row."""
     from datetime import date as date_type
@@ -211,26 +219,33 @@ def purge_s3_data_task(
         logger.error("S3 purge failed", event_id=event_id, error=str(exc))
         raise self.retry(exc=exc) from exc
 
-    loop = asyncio.new_event_loop()
-    try:
-        loop.run_until_complete(_update_gdpr_event(event_id, result))
-    finally:
-        loop.close()
+    asyncio.run(_update_gdpr_event(event_id, result))
 
 
 async def _update_gdpr_event(event_id: str, result: dict) -> None:
-    """Mark the gdpr_events row as completed with file/byte counts."""
-    import uuid as uuid_mod
-    from datetime import UTC, datetime
+    """Mark the gdpr_events row as completed with file/byte counts.
 
-    from siphon.db import get_session_factory
+    Creates a fresh async engine per call so that Celery prefork workers never
+    reuse a connection pool that was bound to a different event loop.
+    """
+    import os
+    import uuid as uuid_mod
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
     from siphon.orm import GdprEvent
 
-    async with get_session_factory()() as session:
-        event = await session.get(GdprEvent, uuid_mod.UUID(event_id))
-        if event:
-            event.status = "completed"
-            event.files_deleted = result["files_deleted"]
-            event.bytes_deleted = result["bytes_deleted"]
-            event.completed_at = datetime.now(tz=UTC)
-            await session.commit()
+    db_url = os.environ["DATABASE_URL"]
+    engine = create_async_engine(db_url, pool_pre_ping=True)
+    db_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with db_factory() as session:
+            event = await session.get(GdprEvent, uuid_mod.UUID(event_id))
+            if event:
+                event.status = "completed"
+                event.files_deleted = result["files_deleted"]
+                event.bytes_deleted = result["bytes_deleted"]
+                event.completed_at = datetime.now(tz=UTC)
+                await session.commit()
+    finally:
+        await engine.dispose()

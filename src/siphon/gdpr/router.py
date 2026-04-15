@@ -120,7 +120,6 @@ async def purge_pipeline_data(
                 base_path,
                 before.isoformat() if before else None,
                 partition,
-                None,  # db_url unused — task builds its own session
             ],
             queue="normal",
         )

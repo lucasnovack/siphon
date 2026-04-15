@@ -159,6 +159,7 @@ class Job:
     destination_path: str | None = None        # resolved S3 path
     _actual_schema: object = field(default=None, repr=False)  # transient; not serialized
 
+    # NOTE: Only used in tests. Production status reads come from job_runs DB table.
     def to_status(self) -> JobStatus:
         """Convert internal Job to API-facing JobStatus."""
         duration_ms = None

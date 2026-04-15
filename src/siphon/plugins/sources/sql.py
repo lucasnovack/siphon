@@ -38,8 +38,8 @@ def _oracle_output_type_handler(cursor, name, default_type, size, precision, sca
         return cursor.var(datetime, arraysize=cursor.arraysize)
     if default_type == oracledb.DB_TYPE_CLOB:
         logger.warning(
-            "CLOB column '%s' detected — large values may cause memory spikes within a chunk",
-            name,
+            "clob_column_detected",
+            column=name,
         )
         return cursor.var(str, arraysize=cursor.arraysize)
     if default_type == oracledb.DB_TYPE_BLOB:
@@ -63,16 +63,7 @@ class SQLSource(Source):
         self.partition_range = partition_range
 
     def extract(self) -> pa.Table:
-        _validate_host(self.connection)
-        query = variables.resolve(self.query)
-
-        if self.connection.startswith("oracle"):
-            logger.info("Extracting Oracle from %s", mask_uri(self.connection))
-            return pa.concat_tables(list(self._extract_oracle_batches(query)))
-
-        conn = _inject_timeout(self.connection)
-        logger.info("Extracting from %s", mask_uri(conn))
-        return self._extract_connectorx(conn, query)
+        return next(iter(self.extract_batches()))
 
     def extract_batches(self, chunk_size: int = _ORACLE_CHUNK_SIZE) -> Iterator[pa.Table]:
         _validate_host(self.connection)

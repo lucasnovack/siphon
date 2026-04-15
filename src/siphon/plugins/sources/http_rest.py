@@ -1,6 +1,7 @@
 # src/siphon/plugins/sources/http_rest.py
 import time
 from collections.abc import Iterator
+from urllib.parse import urlparse
 
 import pyarrow as pa
 import requests
@@ -8,6 +9,7 @@ import structlog
 
 from siphon.plugins.sources import register
 from siphon.plugins.sources.base import Source
+from siphon.plugins.sources.sql import _validate_host
 
 logger = structlog.get_logger()
 
@@ -50,8 +52,10 @@ class HTTPRestSource(Source):
         return headers
 
     def _fetch_oauth2_token(self) -> str:
+        token_url = self.auth_config["token_url"]
+        _validate_host(urlparse(token_url).hostname)
         resp = _session.post(
-            self.auth_config["token_url"],
+            token_url,
             data={
                 "grant_type": "client_credentials",
                 "client_id": self.auth_config["client_id"],
@@ -77,8 +81,9 @@ class HTTPRestSource(Source):
         return pa.concat_tables(batches)
 
     def extract_batches(self, chunk_size: int = 100) -> Iterator[pa.Table]:
+        _validate_host(urlparse(self.url).hostname)
         headers = self._build_headers()
-        logger.info("Extracting from %s (auth=%s, pagination=%s)", self.url, self.auth_type, self.pagination_type)
+        logger.info("http_rest_extract_start", url=self.url, auth=self.auth_type, pagination=self.pagination_type)
         cfg = self.pagination_config
 
         if self.pagination_type == "none":
