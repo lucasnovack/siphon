@@ -10,7 +10,7 @@ Spark adds 30–60 seconds of startup overhead, 2 GB+ of RAM, and a 2 GB contain
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                            Siphon                                   │
+│                        siphon (API container)                       │
 │                                                                     │
 │   ┌────────────┐   ┌────────────────────┐   ┌───────────────────┐  │
 │   │  React UI  │   │   FastAPI (HTTP)    │   │  APScheduler      │  │
@@ -19,25 +19,30 @@ Spark adds 30–60 seconds of startup overhead, 2 GB+ of RAM, and a 2 GB contain
 │                             │                         │             │
 │                   ┌─────────▼─────────────────────────▼──────────┐  │
 │                   │              Job Queue                        │  │
-│                   │    (asyncio + ThreadPoolExecutor)             │  │
+│                   │    Celery (Redis broker)                      │  │
+│                   │    high / normal / low priority queues        │  │
 │                   └─────────────────────┬─────────────────────────┘  │
-│                                         │                           │
-│                             ┌───────────▼───────────┐              │
-│                             │        Worker          │              │
-│                             │  (blocking I/O thread) │              │
-│                             └──────┬──────────┬──────┘              │
-│                                    │          │                     │
-│                          ┌─────────▼──┐  ┌───▼────────────┐        │
-│                          │   Source   │  │  Destination   │        │
-│                          │  (plugin)  │  │   (plugin)     │        │
-│                          └─────────┬──┘  └───┬────────────┘        │
-└────────────────────────────────────┼──────────┼────────────────────┘
-                                     │          │
-                          ┌──────────▼──┐  ┌────▼──────────┐
-                          │  Database   │  │  Object store  │
-                          │  (MySQL /   │  │  (MinIO / S3)  │
-                          │   PG / etc) │  └────────────────┘
-                          └─────────────┘
+└─────────────────────────────────────────┼──────────────────────────┘
+                                          │
+                    ┌─────────────────────▼──────────────────────┐
+                    │         siphon-worker (Celery container)    │
+                    │            prefork, separate container      │
+                    │                                            │
+                    │  ┌──────────────────────────────────────┐  │
+                    │  │           Celery worker               │  │
+                    │  └──────┬──────────────────┬────────────┘  │
+                    │         │                  │               │
+                    │  ┌──────▼──────┐  ┌────────▼────────────┐  │
+                    │  │   Source    │  │   Destination        │  │
+                    │  │  (plugin)   │  │   (plugin)           │  │
+                    │  └──────┬──────┘  └────────┬────────────┘  │
+                    └─────────┼──────────────────┼───────────────┘
+                              │                  │
+               ┌──────────────▼──┐  ┌────────────▼──────────┐  ┌──────────┐
+               │  Source DB      │  │  Object store          │  │  Redis   │
+               │  (MySQL /       │  │  (MinIO / S3)          │  │ (broker) │
+               │   PG / etc)     │  └────────────────────────┘  └──────────┘
+               └─────────────────┘
 ```
 
 **PostgreSQL** (separate container) stores users, connections, pipelines, schedules, and job run history.
@@ -57,32 +62,28 @@ A pipeline run follows this path from trigger to persisted result:
    OR Airflow calls POST /jobs
 
 2. Route handler
-   Authenticates request → validates pipeline exists →
-   decrypts source + destination credentials →
+   Authenticates → validates pipeline → decrypts credentials →
    builds ExtractRequest + Job object →
-   inserts JobRun(status="queued") in DB →
-   calls queue.submit(job, source, destination)
+   INSERTs job_run(status="queued") in DB →
+   calls queue.enqueue(job, priority)
 
-3. Job Queue
-   Stores job in asyncio queue →
-   ThreadPoolExecutor picks it up →
-   calls worker.run_job() in a blocking thread
+3. Queue (queue.py — thin Celery wrapper)
+   Calls celery_app.apply_async(queue=priority) →
+   Celery dispatches to the siphon-worker container
 
-4. Worker
-   Marks job status = "running" →
-   calls source.extract_batches() →
-   (optionally buffers for DQ checks) →
-   calls destination.write() for each batch →
-   computes schema hash →
-   updates Job object in memory
+4. Celery worker (prefork, separate container)
+   Picks up task → calls asyncio.run(run_pipeline_task()) →
+   Creates fresh SQLAlchemy engine (no event loop reuse) →
+   UPDATEs job_run(status="running") →
+   Calls source.extract_batches() →
+   Optionally buffers for DQ checks →
+   Calls destination.write() for each batch →
+   Promotes staging to final in S3 →
+   UPDATEs last_watermark on pipeline (after promote) →
+   UPDATEs job_run(status="success" or "error")
 
-5. Persistence
-   _persist_job_run(): writes final status, rows, duration, error to JobRun table →
-   _update_pipeline_metadata(): updates last_watermark, last_schema_hash on Pipeline
-
-6. Response
-   Frontend polls GET /api/v1/runs/{job_id} until status ≠ queued/running →
-   displays result, logs, rows written
+5. Response
+   Frontend polls GET /api/v1/runs/{job_id} until status ≠ queued/running
 ```
 
 ---
@@ -96,7 +97,9 @@ siphon/
 │   ├── models.py             Pydantic schemas (ExtractRequest, JobStatus…)
 │   ├── orm.py                SQLAlchemy ORM models (tables)
 │   ├── db.py                 Async session factory + FastAPI dependency
-│   ├── queue.py              In-memory job queue + eviction loop
+│   ├── queue.py              Thin Celery wrapper — enqueue() → apply_async(queue=priority)
+│   ├── celery_app.py         Celery configuration, high/normal/low queues
+│   ├── tasks.py              @celery_app.task run_pipeline_task(job_dict)
 │   ├── worker.py             Extraction logic, DQ checks, persistence
 │   ├── variables.py          Date variable substitution (@TODAY, @LAST_MONTH…)
 │   ├── crypto.py             Fernet encrypt/decrypt for connection credentials
@@ -129,11 +132,13 @@ siphon/
 
 ## Key design decisions
 
-### In-memory queue + thread pool (not Celery/Redis)
+### Celery + Redis queue (horizontal scale)
 
-The job queue is a plain `asyncio.Queue` backed by a `ThreadPoolExecutor`. There is no Redis, no Celery, no broker. This keeps the deployment to two containers (app + postgres) and means a pod restart is the only failure mode. Graceful drain (`SIGTERM → drain → stop`) handles in-flight jobs.
+Jobs are dispatched via Celery with three priority queues — `high`, `normal`, and `low` — backed by Redis as the broker. Workers run in separate `siphon-worker` containers using Celery's prefork execution model; each task calls `asyncio.run()` with a fresh SQLAlchemy engine so there is no event loop reuse across tasks.
 
-Trade-off: jobs are lost on ungraceful restart. Acceptable for Bronze-layer workloads where the next scheduled run will re-extract the same data.
+Job state is persisted to PostgreSQL `job_runs` throughout the lifecycle (queued → running → success/error), so the API pod has no in-memory job state and can restart freely without losing visibility into running or completed jobs. Graceful drain is implemented via `task_acks_late=True` and `worker_prefetch_multiplier=1`, which ensures a task is only acknowledged after it completes and that each worker holds at most one task at a time.
+
+Trade-off: requires Redis as an additional service (four containers: `siphon` API, `siphon-worker`, `postgres`, `redis`), but enables multiple worker pods and survives API pod restarts without data loss.
 
 ### ConnectorX for SQL extraction
 

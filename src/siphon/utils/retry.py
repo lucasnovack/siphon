@@ -26,10 +26,10 @@ def _with_retry(fn, max_retries: int = _DEFAULT_MAX_RETRIES, backoff_base: float
                 raise
             sleep = backoff_base * (2 ** attempt) * random.uniform(0.5, 1.5)
             logger.warning(
-                "Attempt %d/%d failed (%s), retrying in %.1fs",
-                attempt + 1,
-                max_retries,
-                exc,
-                sleep,
+                "retry_attempt",
+                attempt=attempt + 1,
+                max_retries=max_retries,
+                error=str(exc),
+                retry_in_seconds=round(sleep, 1),
             )
             time.sleep(sleep)

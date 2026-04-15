@@ -191,14 +191,6 @@ def test_get_job_by_job_id_reads_from_db(client):
         del app.dependency_overrides[main_module.get_db]
 
 
-# ── GET /jobs/{id}/logs ───────────────────────────────────────────────────────
-
-
-def test_get_job_logs_404_for_unknown(client):
-    response = client.get("/jobs/nonexistent/logs")
-    assert response.status_code == 404
-
-
 # ── GET /health/live ──────────────────────────────────────────────────────────
 
 
@@ -212,7 +204,9 @@ def test_health_live_returns_200(client):
 
 
 def test_health_ready_returns_200_when_accepting(client):
-    response = client.get("/health/ready")
+    with patch("siphon.celery_app.app.control") as mock_control:
+        mock_control.inspect.return_value.ping.return_value = {"worker@host": {"ok": "pong"}}
+        response = client.get("/health/ready")
     assert response.status_code == 200
     body = response.json()
     assert body["accepting_jobs"] is True

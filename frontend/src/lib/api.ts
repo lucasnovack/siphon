@@ -147,7 +147,6 @@ export interface JobRun {
   status: 'queued' | 'running' | 'success' | 'failed' | 'partial_success'
   rows_read: number | null
   rows_written: number | null
-  rows_failed: number | null
   error: string | null
   schema_hash: string | null
   schema_changed: boolean

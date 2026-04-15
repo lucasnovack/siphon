@@ -14,11 +14,19 @@ import os
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import asyncio
 import structlog
 
 logger = structlog.get_logger()
 
 _scheduler = None  # module-level singleton, started in lifespan
+_loop: asyncio.AbstractEventLoop | None = None  # set via set_event_loop() from lifespan
+
+
+def set_event_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """Store the running event loop so APScheduler background threads can submit coroutines."""
+    global _loop
+    _loop = loop
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -61,7 +69,7 @@ def start_scheduler() -> None:
         )
         logger.info("SLA checker scheduled (every 5 minutes)")
     except Exception as exc:
-        logger.error("Failed to start scheduler: %s", exc)
+        logger.error("scheduler_start_failed", error=str(exc))
         _scheduler = None
 
 
@@ -73,7 +81,7 @@ def stop_scheduler() -> None:
             _scheduler.shutdown(wait=False)
             logger.info("Scheduler stopped")
         except Exception as exc:
-            logger.warning("Error stopping scheduler: %s", exc)
+            logger.warning("scheduler_stop_error", error=str(exc))
         _scheduler = None
 
 
@@ -97,7 +105,7 @@ async def sync_schedule(pipeline_id: uuid.UUID, cron: str, is_active: bool) -> N
         existing = _scheduler.get_job(job_id)
         if existing:
             _scheduler.reschedule_job(job_id, trigger="cron", **trigger_kwargs)
-            logger.info("Rescheduled job %s cron=%s", job_id, cron)
+            logger.info("job_rescheduled", job_id=job_id, cron=cron)
         else:
             _scheduler.add_job(
                 _fire_pipeline,
@@ -107,9 +115,9 @@ async def sync_schedule(pipeline_id: uuid.UUID, cron: str, is_active: bool) -> N
                 replace_existing=True,
                 **trigger_kwargs,
             )
-            logger.info("Scheduled job %s cron=%s", job_id, cron)
+            logger.info("job_scheduled", job_id=job_id, cron=cron)
     except Exception as exc:
-        logger.error("sync_schedule failed for pipeline %s: %s", pipeline_id, exc)
+        logger.error("sync_schedule_failed", pipeline_id=str(pipeline_id), error=str(exc))
 
 
 async def remove_schedule(pipeline_id: uuid.UUID) -> None:
@@ -125,7 +133,7 @@ async def remove_schedule(pipeline_id: uuid.UUID) -> None:
 def _remove_job(job_id: str) -> None:
     try:
         _scheduler.remove_job(job_id)
-        logger.info("Removed scheduled job %s", job_id)
+        logger.info("schedule_removed", job_id=job_id)
     except Exception:
         pass  # job may not exist
 
@@ -165,7 +173,7 @@ def _fire_pipeline(pipeline_id_str: str) -> None:
     try:
         _fire_with_advisory_lock(pipeline_id_str)
     except Exception as exc:
-        logger.error("Scheduled fire failed for pipeline %s: %s", pipeline_id_str, exc)
+        logger.error("scheduled_fire_failed", pipeline_id=pipeline_id_str, error=str(exc))
 
 
 def _fire_with_advisory_lock(pipeline_id_str: str) -> None:
@@ -194,7 +202,7 @@ def _fire_with_advisory_lock(pipeline_id_str: str) -> None:
             (acquired,) = cur.fetchone()
             if not acquired:
                 logger.debug(
-                    "Advisory lock not acquired for pipeline %s — skipping", pipeline_id_str
+                    "advisory_lock_not_acquired", pipeline_id=pipeline_id_str
                 )
                 conn.rollback()
                 return
@@ -267,7 +275,7 @@ def _check_sla_violations() -> None:
         finally:
             conn.close()
     except Exception as exc:
-        logger.error("SLA check failed: %s", exc)
+        logger.error("sla_check_failed", error=str(exc))
 
 
 def _run_sla_check(conn) -> None:
@@ -304,9 +312,9 @@ def _run_sla_check(conn) -> None:
             payload = _build_sla_payload(pipeline_id, sla_minutes, last_success_at, now)
             try:
                 httpx.post(webhook_url, json=payload, timeout=5)
-                logger.warning("SLA breach fired for pipeline %s", pipeline_id)
+                logger.warning("sla_breach_fired", pipeline_id=pipeline_id)
             except Exception as exc:
-                logger.warning("SLA webhook POST failed for pipeline %s: %s", pipeline_id, exc)
+                logger.warning("sla_webhook_post_failed", pipeline_id=pipeline_id, error=str(exc))
 
             cur.execute(
                 "UPDATE pipelines SET sla_notified_at = %s WHERE id = %s::uuid",
@@ -317,13 +325,25 @@ def _run_sla_check(conn) -> None:
 
 def _enqueue_pipeline_async(pipeline_id_str: str) -> None:
     """Submit a pipeline trigger to the async queue from a background thread."""
-    import asyncio
-
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        logger.warning("No event loop available to enqueue pipeline %s", pipeline_id_str)
-        return
+    loop = _loop
+    if loop is None:
+        # Fall back to asyncio.get_event_loop() for environments where
+        # set_event_loop() was not called from lifespan (e.g. tests).
+        # This may emit a DeprecationWarning on Python 3.10+ and will fail
+        # on Python 3.12+ if no loop is running; callers should invoke
+        # set_event_loop() at startup to avoid this path.
+        import warnings
+        try:
+            loop = asyncio.get_event_loop()
+            warnings.warn(
+                "scheduler._loop is not set; falling back to asyncio.get_event_loop(). "
+                "Call scheduler.set_event_loop(loop) at startup.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        except RuntimeError:
+            logger.warning("no_event_loop", pipeline_id=pipeline_id_str)
+            return
 
     asyncio.run_coroutine_threadsafe(
         _async_trigger_pipeline(pipeline_id_str), loop
@@ -336,7 +356,7 @@ async def _async_trigger_pipeline(pipeline_id_str: str) -> None:
 
     factory = get_session_factory()
     if factory is None:
-        logger.warning("No DB session factory; cannot trigger pipeline %s", pipeline_id_str)
+        logger.warning("no_db_session_factory", pipeline_id=pipeline_id_str)
         return
 
     import json
@@ -354,13 +374,13 @@ async def _async_trigger_pipeline(pipeline_id_str: str) -> None:
     async with factory() as session:
         p = await session.get(Pipeline, pipeline_uuid)
         if p is None or p.dest_connection_id is None:
-            logger.error("Scheduled pipeline %s not found or missing dest_connection", pipeline_id_str)
+            logger.error("pipeline_not_found_or_missing_dest", pipeline_id=pipeline_id_str)
             return
 
         src_conn = await session.get(Connection, p.source_connection_id)
         dest_conn = await session.get(Connection, p.dest_connection_id)
         if src_conn is None or dest_conn is None:
-            logger.error("Scheduled pipeline %s: connection not found", pipeline_id_str)
+            logger.error("pipeline_connection_not_found", pipeline_id=pipeline_id_str)
             return
 
         src_config = json.loads(decrypt(src_conn.encrypted_config))
@@ -387,7 +407,7 @@ async def _async_trigger_pipeline(pipeline_id_str: str) -> None:
         try:
             req = ExtractRequest(**{"source": source_payload, "destination": dest_payload})
         except Exception as exc:
-            logger.error("Scheduled pipeline %s invalid config: %s", pipeline_id_str, exc)
+            logger.error("pipeline_invalid_config", pipeline_id=pipeline_id_str, error=str(exc))
             return
 
         has_dq = p.min_rows_expected is not None or p.max_rows_drop_pct is not None
@@ -429,7 +449,7 @@ async def _async_trigger_pipeline(pipeline_id_str: str) -> None:
         get_source(req.source.type)
         get_destination(req.destination.type)
     except ValueError as exc:
-        logger.error("Scheduled pipeline %s: %s", pipeline_id_str, exc)
+        logger.error("pipeline_plugin_not_found", pipeline_id=pipeline_id_str, error=str(exc))
         return
 
     from siphon.main import queue
@@ -439,4 +459,4 @@ async def _async_trigger_pipeline(pipeline_id_str: str) -> None:
         dest_payload,
         max_concurrent=src_conn.max_concurrent_jobs,
     )
-    logger.info("Scheduled trigger queued: pipeline=%s job=%s", pipeline_id_str, job.job_id)
+    logger.info("scheduled_trigger_queued", pipeline_id=pipeline_id_str, job_id=job.job_id)

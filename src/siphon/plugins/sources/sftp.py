@@ -81,7 +81,7 @@ class SFTPSource(Source):
         self._origin_map = {}
         with self._single_connection() as sftp:
             files = self._list_and_filter(sftp)
-            logger.info("Found %d files to process across %d paths", len(files), len(self.paths))
+            logger.info("files_discovered", file_count=len(files), path_count=len(self.paths))
             if self.processing_folder:
                 files = self._move_to_processing(sftp, files)
             for chunk in _chunked(files, chunk_size):
@@ -92,11 +92,11 @@ class SFTPSource(Source):
                         tables.append(table)
                         if self.processed_folder:
                             self._move_to_processed(sftp, f)
-                        logger.info("Processed %s (%d rows)", f, table.num_rows)
+                        logger.info("file_processed", path=f, row_count=table.num_rows)
                     except Exception as exc:
                         if self.fail_fast:
                             raise
-                        logger.warning("Failed to process %s: %s", f, exc)
+                        logger.warning("file_processing_failed", path=f, error=str(exc))
                         if self.processing_folder:
                             self._move_back_to_origin(sftp, f)
                         self.failed_files.append(f)
@@ -132,22 +132,22 @@ class SFTPSource(Source):
             try:
                 entries = sftp.listdir_attr(remote_dir)
             except FileNotFoundError:
-                logger.warning("Remote path not found: %s", remote_dir)
+                logger.warning("remote_path_not_found", remote_dir=remote_dir)
                 continue
             for entry in entries:
                 if stat.S_ISDIR(entry.st_mode or 0):
                     continue
                 filename = entry.filename
                 if any(fnmatch.fnmatch(filename, pat) for pat in self.skip_patterns):
-                    logger.debug("Skipping %s (matches skip_patterns)", filename)
+                    logger.debug("file_skipped", filename=filename, reason="matches_skip_patterns")
                     continue
                 size = entry.st_size or 0
                 if size > _MAX_FILE_SIZE_BYTES:
                     logger.warning(
-                        "Skipping %s (%d MB exceeds %d MB limit)",
-                        filename,
-                        size // (1024 * 1024),
-                        _MAX_FILE_SIZE_MB,
+                        "file_skipped_size_limit",
+                        filename=filename,
+                        size_mb=size // (1024 * 1024),
+                        limit_mb=_MAX_FILE_SIZE_MB,
                     )
                     continue
                 result.append(f"{remote_dir.rstrip('/')}/{filename}")
@@ -177,12 +177,12 @@ class SFTPSource(Source):
         origin = self._origin_map.get(path, path)
         try:
             sftp.rename(path, origin)
-            logger.info("Moved failed file back to origin: %s -> %s", path, origin)
+            logger.info("file_moved_back_to_origin", path=path, origin=origin)
         except Exception as exc:
             logger.error(
-                "Could not move %s back to origin %s: %s — file may need manual recovery",
-                path,
-                origin,
-                exc,
+                "file_move_back_failed",
+                path=path,
+                origin=origin,
+                error=str(exc),
             )
 

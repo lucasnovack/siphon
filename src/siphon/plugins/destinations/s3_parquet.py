@@ -74,8 +74,12 @@ class S3ParquetDestination(Destination):
                 behavior = "delete_matching" if is_first_chunk else "overwrite_or_ignore"
                 basename_template = "part-{i}.parquet"
         logger.info(
-            "Writing %d rows to %s (mode=%s, behavior=%s, partition_by=%s)",
-            table.num_rows, root_path, self.extraction_mode, behavior, self.partition_by,
+            "writing_rows",
+            row_count=table.num_rows,
+            root_path=root_path,
+            extraction_mode=self.extraction_mode,
+            behavior=behavior,
+            partition_by=self.partition_by,
         )
         write_kwargs = {}
         if partition_cols:
@@ -100,7 +104,7 @@ class S3ParquetDestination(Destination):
         staging = self._staging_path
         try:
             fs.delete_dir(staging)
-            logger.info("Cleaned up stale staging path %s", staging)
+            logger.info("staging_cleaned_up", staging_path=staging)
         except FileNotFoundError:
             pass  # no staging from previous run
 
@@ -114,7 +118,7 @@ class S3ParquetDestination(Destination):
         try:
             file_infos = fs.get_file_info(pafs.FileSelector(staging, recursive=True))
         except FileNotFoundError:
-            logger.warning("Staging path %s not found during promote — nothing to promote", staging)
+            logger.warning("staging_path_not_found", staging_path=staging)
             return
         promoted = 0
         for info in file_infos:
@@ -124,7 +128,7 @@ class S3ParquetDestination(Destination):
                 fs.copy_file(info.path, dest_file)
                 promoted += 1
         fs.delete_dir(staging)
-        logger.info("Promoted %d files from %s to %s", promoted, staging, root)
+        logger.info("staging_promoted", file_count=promoted, staging_path=staging, dest_path=root)
 
 
 def _validate_path(path: str) -> None:

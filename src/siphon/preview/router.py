@@ -7,6 +7,7 @@ Available to both admin and operator roles.
 import json
 import re
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +17,7 @@ from siphon.auth.router import limiter
 from siphon.db import get_db
 
 router = APIRouter(prefix="/api/v1/preview", tags=["preview"])
+logger = structlog.get_logger()
 
 _LIMIT_RE = re.compile(r"\bLIMIT\s+\d+", re.IGNORECASE)
 
@@ -72,7 +74,8 @@ async def preview_query(
         rows = [[d[col][i] for col in columns] for i in range(table.num_rows)]
         return PreviewResponse(columns=columns, rows=rows, row_count=table.num_rows)
     except Exception as exc:
-        raise HTTPException(400, f"Query failed: {exc}") from exc
+        logger.warning("preview_query_failed", error=str(exc))
+        raise HTTPException(400, "Query failed — check server logs") from exc
 
 
 def _apply_limit(query: str, limit: int) -> str:

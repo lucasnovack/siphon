@@ -22,7 +22,7 @@ from siphon.auth.router import router as auth_router
 from siphon.connections.router import router as connections_router
 from siphon.db import get_db, get_session_factory
 from siphon.gdpr.router import router as gdpr_router
-from siphon.models import ExtractRequest, Job, JobStatus, LogsResponse
+from siphon.models import ExtractRequest, Job, JobStatus
 from siphon.pipelines.router import router as pipelines_router
 from siphon.plugins.destinations import get as get_destination
 from siphon.plugins.sources import get as get_source
@@ -118,14 +118,16 @@ logger = structlog.get_logger()
 _configure_logging()
 
 # ── Config ────────────────────────────────────────────────────────────────────
-DRAIN_TIMEOUT = int(os.getenv("SIPHON_DRAIN_TIMEOUT", "3600"))
 ENABLE_SYNC_EXTRACT: bool = os.getenv("SIPHON_ENABLE_SYNC_EXTRACT", "false").lower() == "true"
 
 # ── Startup warnings ──────────────────────────────────────────────────────────
 if not os.getenv("SIPHON_API_KEY"):
     logger.warning("SIPHON_API_KEY not set — API authentication is disabled")
 if not os.getenv("SIPHON_ALLOWED_HOSTS"):
-    logger.warning("SIPHON_ALLOWED_HOSTS not set — all hosts are permitted (SSRF risk)")
+    logger.warning(
+        "ssrf_protection_disabled",
+        warning="SIPHON_ALLOWED_HOSTS is not set — all outbound SQL/SFTP hosts are allowed. Set this in production."
+    )
 if not os.getenv("SIPHON_JWT_SECRET"):
     logger.warning("SIPHON_JWT_SECRET not set — JWT tokens are signed with a dev secret (insecure)")
 
@@ -172,14 +174,14 @@ async def _create_admin_if_missing() -> None:
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from siphon.auth.jwt_utils import validate_jwt_secret
+    validate_jwt_secret()
     await _create_admin_if_missing()
-    queue.start()
     from siphon.scheduler import start_scheduler
     start_scheduler()
     yield
     from siphon.scheduler import stop_scheduler
     stop_scheduler()
-    await queue.drain(timeout=DRAIN_TIMEOUT)
     from siphon.plugins.sources.http_rest import _session as _http_session
     _http_session.close()
 
@@ -258,17 +260,14 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-def _make_job_and_plugins(req: ExtractRequest) -> tuple[Job, object, object]:
+def _make_job_and_plugins(req: ExtractRequest) -> Job:
     try:
-        source_cls = get_source(req.source.type)
-        dest_cls = get_destination(req.destination.type)
+        get_source(req.source.type)
+        get_destination(req.destination.type)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    source = source_cls(**req.source.model_dump(exclude={"type"}))
-    destination = dest_cls(**req.destination.model_dump(exclude={"type"}))
-    job = Job(job_id=str(uuid.uuid4()))
-    return job, source, destination
+    return Job(job_id=str(uuid.uuid4()))
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -278,7 +277,7 @@ async def create_job(
     _: Principal = Depends(get_current_principal),  # noqa: B008
 ) -> dict:
     """Submit an async extraction job. Returns immediately with job_id."""
-    job, _, __ = _make_job_and_plugins(req)
+    job = _make_job_and_plugins(req)
     source_config = req.source.model_dump()
     dest_config = req.destination.model_dump()
     await queue.submit(job, source_config, dest_config)
@@ -290,11 +289,16 @@ async def extract_sync(
     req: ExtractRequest,
     _: Principal = Depends(get_current_principal),  # noqa: B008
 ) -> dict:
-    """Synchronous extraction — disabled by default. Set SIPHON_ENABLE_SYNC_EXTRACT=true."""
+    """Submit an extraction job and return immediately with status "queued".
+
+    Despite the route name, this endpoint is async: it dispatches to Celery and
+    does NOT block until completion. Poll GET /runs/{job_id} for the result.
+    Disabled by default — set SIPHON_ENABLE_SYNC_EXTRACT=true to enable.
+    """
     if not ENABLE_SYNC_EXTRACT:
         raise HTTPException(status_code=404, detail="Not Found")
 
-    job, _, __ = _make_job_and_plugins(req)
+    job = _make_job_and_plugins(req)
     source_config = req.source.model_dump()
     dest_config = req.destination.model_dump()
     await queue.submit(job, source_config, dest_config)
@@ -341,17 +345,6 @@ async def get_job(
     )
 
 
-@app.get("/jobs/{job_id}/logs", response_model=LogsResponse)
-async def get_job_logs(
-    job_id: str,
-    since: int = 0,
-    _: Principal = Depends(get_current_principal),  # noqa: B008
-) -> LogsResponse:
-    # In Phase 16, job state is stored in the DB (job_runs table).
-    # Task 4 will implement DB-backed lookup; for now return 404.
-    raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
-
-
 @app.get("/health/live")
 async def health_live() -> dict:
     return {"status": "ok"}
@@ -359,6 +352,17 @@ async def health_live() -> dict:
 
 @app.get("/health/ready")
 async def health_ready() -> JSONResponse:
+    from siphon.celery_app import app as celery_app
+
+    try:
+        celery_app.control.inspect(timeout=1).ping()
+        broker_ok = True
+    except Exception:
+        broker_ok = False
+
+    if not broker_ok:
+        raise HTTPException(status_code=503, detail="Celery broker unavailable")
+
     if queue.is_draining:
         return JSONResponse(
             status_code=503,
