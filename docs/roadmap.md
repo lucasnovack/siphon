@@ -139,6 +139,14 @@ The phases below complete Siphon as a production-ready platform, delivered after
 
 ---
 
+## Upcoming
+
+### Google Cloud Storage (GCS) Destination 🔜
+
+- **Native GCS Parquet writer (`gcs_parquet`)** — expand Bronze-layer delivery beyond S3-compatible storage to Google Cloud Storage (`gs://`) using PyArrow's `GcsFileSystem` (Service Account JSON / ADC), sharing the same atomic staging, partitioning, and Parquet write pipeline.
+
+---
+
 ## Design decisions guiding the roadmap
 
 - **Bronze layer only** — Siphon is not a replacement for dbt or Spark for Silver/Gold; focus is on reliable Extract-Load

@@ -1,6 +1,6 @@
 # Siphon Documentation
 
-Siphon is a self-hosted data pipeline service that extracts data from SQL databases and SFTP sources and writes it as Parquet files to S3-compatible object storage. It replaces Apache Spark for Bronze-layer extraction workloads.
+Siphon is a self-hosted data pipeline service that extracts data from SQL databases, SFTP, and HTTP/REST sources and writes them as Parquet files to object storage (S3-compatible today, with Google Cloud Storage (GCS) planned next). It replaces Apache Spark for Bronze-layer extraction workloads.
 
 ---
 
