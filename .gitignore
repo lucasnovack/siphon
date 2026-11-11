@@ -11,6 +11,7 @@ dist/
 .worktrees/
 .claude/
 claude.md
+CLAUDE.md
 docs/plans/
 docs/specs/
 docs/superpowers/
