@@ -4,7 +4,7 @@
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-A lightweight, self-hosted data pipeline platform that replaces Apache Spark in the Bronze layer of a medallion architecture. Siphon handles the full lifecycle of extraction pipelines: connection registry, scheduling, incremental watermarks, data quality checks, schema evolution detection, and Parquet writes to S3-compatible storage.
+A lightweight, self-hosted data pipeline platform that replaces Apache Spark in the Bronze layer of a medallion architecture. Siphon handles the full lifecycle of extraction pipelines: connection registry, scheduling, incremental watermarks, data quality checks, schema evolution detection, and Parquet writes to object storage (S3-compatible today, with Google Cloud Storage (GCS) next on the roadmap).
 
 **Why not Spark?** A typical Bronze job is three lines: read SQL, write Parquet. For that, Spark adds 30–60s of cold-start, 2 GB of memory, and a JVM-based image — 200 times the overhead. Siphon does the same job in under 5 seconds with ~200 MB of RAM.
 
@@ -53,7 +53,7 @@ A lightweight, self-hosted data pipeline platform that replaces Apache Spark in 
 └─────────────────────────────────────────────────────┘
 ```
 
-**Runtime components:** PostgreSQL (state + scheduling) · Redis (Celery broker/backend) · S3-compatible storage (destination — AWS S3, MinIO, or any compatible service)
+**Runtime components:** PostgreSQL (state + scheduling) · Redis (Celery broker/backend) · Object storage (AWS S3, MinIO, or any S3-compatible service; Google Cloud Storage planned)
 
 ---
 
