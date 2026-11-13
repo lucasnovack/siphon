@@ -125,6 +125,7 @@ class JobRun(Base):
         UUID(as_uuid=True), ForeignKey("connections.id"), nullable=True
     )
     destination_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    logs: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
