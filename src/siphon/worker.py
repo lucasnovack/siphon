@@ -216,8 +216,10 @@ def _sync_extract_and_write(
             dq_error = _check_data_quality(dq, 0)
             if dq_error:
                 raise ValueError(dq_error)
+            job.logs.append("No data returned from source")
             return 0, 0
 
+        job.logs.append(f"Extracted {len(batches)} batches from source for validation")
         job.schema_hash = _compute_schema_hash(batches[0].schema)
 
         # Schema validation (expected_schema DQ check)
@@ -234,12 +236,15 @@ def _sync_extract_and_write(
         dq_error = _check_data_quality(dq, rows_read)
         if dq_error:
             raise ValueError(dq_error)
+        job.logs.append(f"Data quality checks passed ({rows_read} rows)")
 
         rows_written = 0
         for i, batch in enumerate(batches):
             if job.pipeline_pii:
                 batch = _apply_pii_masking(batch, job.pipeline_pii)
-            rows_written += destination.write(batch, is_first_chunk=(i == 0))
+            written = destination.write(batch, is_first_chunk=(i == 0))
+            rows_written += written
+            job.logs.append(f"Batch {i + 1}/{len(batches)}: wrote {written} rows")
         return rows_read, rows_written
 
     # No DQ — stream directly without buffering
@@ -258,7 +263,9 @@ def _sync_extract_and_write(
         rows_read += batch.num_rows
         if job.pipeline_pii:
             batch = _apply_pii_masking(batch, job.pipeline_pii)
-        rows_written += destination.write(batch, is_first_chunk=(i == 0))
+        written = destination.write(batch, is_first_chunk=(i == 0))
+        rows_written += written
+        job.logs.append(f"Batch {i + 1}: extracted and wrote {written} rows")
     return rows_read, rows_written
 
 
@@ -311,6 +318,7 @@ async def _persist_job_run(job: Job, db_factory) -> None:
                         if job.source_connection_id else None
                     )
                     run.destination_path = job.destination_path
+                    run.logs = list(job.logs)
                     await session.commit()
                     return
 
@@ -330,10 +338,17 @@ async def _persist_job_run(job: Job, db_factory) -> None:
                     if job.source_connection_id else None
                 ),
                 destination_path=job.destination_path,
+                logs=list(job.logs),
                 created_at=datetime.now(tz=UTC),
             )
             session.add(run)
             await session.commit()
+            if hasattr(session, "refresh"):
+                try:
+                    await session.refresh(run)
+                    job.run_id = run.id
+                except Exception:
+                    pass
 
     except Exception as exc:
         logger.warning("persist_job_run_failed", error=str(exc))
@@ -423,6 +438,7 @@ async def _run_job_inner(
     loop = asyncio.get_running_loop()
     job.status = "running"
     job.started_at = datetime.now(tz=UTC)
+    job.logs.append(f"Job execution started (pipeline={job.pipeline_id or 'none'})")
     logger.info("job_started", pipeline=job.pipeline_id or "none")
 
     try:
@@ -503,8 +519,11 @@ async def _run_job_inner(
         # staging and got cleaned up on restart — a silent data gap.
         if job.status in ("success", "partial_success") and hasattr(destination, "promote"):
             try:
+                job.logs.append("Promoting staging files to final destination")
                 await loop.run_in_executor(executor, destination.promote)
+                job.logs.append("Staging promotion complete")
             except Exception as exc:
+                job.logs.append(f"ERROR: Staging promote failed: {exc}")
                 logger.error("staging_promote_failed", error=str(exc))
         if db_factory is not None:
             await _persist_job_run(job, db_factory)
