@@ -86,14 +86,19 @@ async def get_run_logs(
     if run is None:
         raise HTTPException(404, "Run not found")
 
-    from siphon.main import queue
+    logs_list: list[str] = run.logs if run.logs is not None else []
 
-    job = queue.get_job(run_id)
-    if job is None:
-        # Job already evicted or never in memory (historical run)
-        return {"run_id": run_id, "logs": [], "next_offset": since}
+    if not logs_list:
+        try:
+            from siphon.main import queue
 
-    logs_slice = job.logs[since:]
+            job = queue.get_job(run_id)
+            if job and job.logs:
+                logs_list = job.logs
+        except Exception:
+            pass
+
+    logs_slice = logs_list[since:]
     return {
         "run_id": run_id,
         "logs": logs_slice,

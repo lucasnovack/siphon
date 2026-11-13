@@ -167,6 +167,7 @@ async def test_run_job_persists_job_run_on_success():
     assert added_obj.job_id == job.job_id
     assert added_obj.status == "success"
     assert added_obj.rows_read == 3
+    assert added_obj.logs is not None and len(added_obj.logs) > 0
     ex.shutdown(wait=False)
 
 

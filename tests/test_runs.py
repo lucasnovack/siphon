@@ -39,6 +39,7 @@ def _make_run(status="success"):
     r.started_at = datetime.now(tz=UTC)
     r.finished_at = datetime.now(tz=UTC)
     r.created_at = datetime.now(tz=UTC)
+    r.logs = []
     return r
 
 
@@ -87,20 +88,41 @@ def test_get_run_logs_returns_404_when_run_missing(client):
 def test_get_run_logs_returns_empty_when_job_evicted(client):
     tc, db = client
     run = _make_run()
-    db.get = AsyncMock(return_value=run)
+    run.logs = []
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = run
+    db.execute = AsyncMock(return_value=result_mock)
 
     from unittest.mock import patch
     with patch("siphon.main.queue") as mock_queue:
         mock_queue.get_job.return_value = None
-        resp = tc.get(f"/api/v1/runs/{run.id}/logs")
+        resp = tc.get(f"/api/v1/runs/{run.job_id}/logs")
     assert resp.status_code == 200
     assert resp.json()["logs"] == []
 
 
-def test_get_run_logs_cursor(client):
+def test_get_run_logs_from_db_cursor(client):
     tc, db = client
     run = _make_run(status="running")
-    db.get = AsyncMock(return_value=run)
+    run.logs = ["line1", "line2", "line3"]
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = run
+    db.execute = AsyncMock(return_value=result_mock)
+
+    resp = tc.get(f"/api/v1/runs/{run.job_id}/logs?since=1")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["logs"] == ["line2", "line3"]
+    assert body["next_offset"] == 3
+
+
+def test_get_run_logs_queue_fallback_cursor(client):
+    tc, db = client
+    run = _make_run(status="running")
+    run.logs = []
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = run
+    db.execute = AsyncMock(return_value=result_mock)
 
     from siphon.models import Job
     job = MagicMock(spec=Job)
@@ -109,7 +131,7 @@ def test_get_run_logs_cursor(client):
     from unittest.mock import patch
     with patch("siphon.main.queue") as mock_queue:
         mock_queue.get_job.return_value = job
-        resp = tc.get(f"/api/v1/runs/{run.id}/logs?since=1")
+        resp = tc.get(f"/api/v1/runs/{run.job_id}/logs?since=1")
 
     assert resp.status_code == 200
     body = resp.json()
