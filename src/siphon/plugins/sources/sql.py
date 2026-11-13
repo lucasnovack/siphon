@@ -19,6 +19,7 @@ logger = structlog.get_logger()
 _CONNECT_TIMEOUT = int(os.getenv("SIPHON_CONNECT_TIMEOUT", "30"))
 _ALLOWED_HOSTS = os.getenv("SIPHON_ALLOWED_HOSTS", "")
 _ORACLE_CHUNK_SIZE = int(os.getenv("SIPHON_ORACLE_CHUNK_SIZE", "50000"))
+_SQL_CHUNK_SIZE = int(os.getenv("SIPHON_SQL_CHUNK_SIZE", "250000"))
 
 
 def _oracle_rows_to_arrow(rows: list, description) -> pa.Table:
@@ -63,16 +64,22 @@ class SQLSource(Source):
         self.partition_range = partition_range
 
     def extract(self) -> pa.Table:
-        return next(iter(self.extract_batches()))
+        _validate_host(self.connection)
+        query = variables.resolve(self.query)
+        if self.connection.startswith("oracle"):
+            return next(iter(self._extract_oracle_batches(query)))
+        return self._extract_connectorx(_inject_timeout(self.connection), query)
 
-    def extract_batches(self, chunk_size: int = _ORACLE_CHUNK_SIZE) -> Iterator[pa.Table]:
+    def extract_batches(self, chunk_size: int = _SQL_CHUNK_SIZE) -> Iterator[pa.Table]:
         _validate_host(self.connection)
         query = variables.resolve(self.query)
 
         if self.connection.startswith("oracle"):
             yield from self._extract_oracle_batches(query, chunk_size)
         else:
-            yield self._extract_connectorx(_inject_timeout(self.connection), query)
+            yield from self._extract_connectorx_batches(
+                _inject_timeout(self.connection), query, chunk_size
+            )
 
     def _extract_connectorx(self, conn: str, query: str) -> pa.Table:
         kwargs: dict = {"return_type": "arrow"}
@@ -83,6 +90,58 @@ class SQLSource(Source):
         if self.partition_range is not None:
             kwargs["partition_range"] = self.partition_range
         return _with_retry(lambda: cx.read_sql(conn, query, **kwargs))
+
+    def _extract_connectorx_batches(
+        self, conn: str, query: str, chunk_size: int
+    ) -> Iterator[pa.Table]:
+        kwargs: dict = {"return_type": "arrow_stream"}
+        if self.partition_on is not None:
+            kwargs["partition_on"] = self.partition_on
+        if self.partition_num is not None:
+            kwargs["partition_num"] = self.partition_num
+        if self.partition_range is not None:
+            kwargs["partition_range"] = self.partition_range
+
+        try:
+            reader = _with_retry(lambda: cx.read_sql(conn, query, **kwargs))
+        except Exception as exc:
+            logger.warning(
+                "connectorx_arrow_stream_failed_fallback_to_arrow",
+                error=str(exc),
+            )
+            kwargs["return_type"] = "arrow"
+            yield _with_retry(lambda: cx.read_sql(conn, query, **kwargs))
+            return
+
+        if isinstance(reader, pa.Table):
+            yield reader
+            return
+
+        batch_buffer: list[pa.RecordBatch] = []
+        rows_in_buffer = 0
+        has_yielded = False
+
+        for batch in reader:
+            if batch.num_rows == 0:
+                continue
+            batch_buffer.append(batch)
+            rows_in_buffer += batch.num_rows
+            if rows_in_buffer >= chunk_size:
+                yield pa.Table.from_batches(batch_buffer)
+                batch_buffer = []
+                rows_in_buffer = 0
+                has_yielded = True
+
+        if batch_buffer:
+            yield pa.Table.from_batches(batch_buffer)
+            has_yielded = True
+
+        if not has_yielded:
+            schema = getattr(reader, "schema", None)
+            if schema is not None:
+                yield pa.Table.from_batches([], schema=schema)
+            else:
+                yield pa.table({})
 
     def _extract_oracle_batches(
         self, query: str, chunk_size: int = _ORACLE_CHUNK_SIZE
