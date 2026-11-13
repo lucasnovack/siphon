@@ -351,3 +351,76 @@ def test_extract_connectorx_does_not_retry_value_error():
         src._extract_connectorx("postgresql://u:p@localhost/db", "BAD")
 
     assert call_count == 1
+
+
+# ── ConnectorX streaming (extract_batches) ───────────────────────────────────
+
+
+def test_extract_batches_connectorx_streams_chunks():
+    """ConnectorX RecordBatchReader batches are grouped and yielded in chunk_size Tables."""
+    schema = pa.schema([("id", pa.int64())])
+    b1 = pa.record_batch([pa.array([1, 2, 3])], schema=schema)
+    b2 = pa.record_batch([pa.array([4, 5, 6])], schema=schema)
+    b3 = pa.record_batch([pa.array([7, 8])], schema=schema)
+
+    class MockReader:
+        def __init__(self, batches):
+            self._batches = batches
+            self.schema = schema
+
+        def __iter__(self):
+            return iter(self._batches)
+
+    mock_reader = MockReader([b1, b2, b3])
+
+    with patch("siphon.plugins.sources.sql.cx.read_sql", return_value=mock_reader) as mock_cx:
+        cls = get_source("sql")
+        src = cls(connection="postgresql://u:p@localhost/db", query="SELECT id FROM t")
+        chunks = list(src.extract_batches(chunk_size=4))
+
+    mock_cx.assert_called_once()
+    assert mock_cx.call_args[1].get("return_type") == "arrow_stream"
+    assert len(chunks) == 2
+    assert chunks[0].num_rows == 6  # b1 (3) + b2 (3) >= 4
+    assert chunks[1].num_rows == 2  # b3 (2)
+    assert chunks[0].column("id").to_pylist() == [1, 2, 3, 4, 5, 6]
+    assert chunks[1].column("id").to_pylist() == [7, 8]
+
+
+def test_extract_batches_connectorx_empty_stream():
+    """When reader produces no data, yields one empty Table with reader schema."""
+    schema = pa.schema([("id", pa.int64())])
+
+    class MockEmptyReader:
+        def __init__(self):
+            self.schema = schema
+
+        def __iter__(self):
+            return iter([])
+
+    with patch("siphon.plugins.sources.sql.cx.read_sql", return_value=MockEmptyReader()):
+        cls = get_source("sql")
+        src = cls(connection="postgresql://u:p@localhost/db", query="SELECT id FROM t")
+        chunks = list(src.extract_batches(chunk_size=100))
+
+    assert len(chunks) == 1
+    assert chunks[0].num_rows == 0
+    assert chunks[0].schema == schema
+
+
+def test_extract_batches_connectorx_fallback_to_arrow():
+    """If arrow_stream fails, gracefully falls back to return_type='arrow'."""
+    table = pa.table({"id": [10, 20]})
+
+    def fake_read_sql(conn, query, **kwargs):
+        if kwargs.get("return_type") == "arrow_stream":
+            raise ValueError("arrow_stream not supported")
+        return table
+
+    with patch("siphon.plugins.sources.sql.cx.read_sql", side_effect=fake_read_sql):
+        cls = get_source("sql")
+        src = cls(connection="postgresql://u:p@localhost/db", query="SELECT id FROM t")
+        chunks = list(src.extract_batches())
+
+    assert len(chunks) == 1
+    assert chunks[0] is table
