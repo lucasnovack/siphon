@@ -157,6 +157,8 @@ class Job:
     schema_hash: str | None = None      # computed during extraction; written to job_runs
     source_connection_id: str | None = None   # UUID string; populated by trigger_pipeline
     destination_path: str | None = None        # resolved S3 path
+    pipeline_prev_rows: int | None = None      # rows_read from previous successful run
+    pipeline_extraction_mode: str | None = None  # "full_refresh" | "incremental"
     _actual_schema: object = field(default=None, repr=False)  # transient; not serialized
 
     # NOTE: Only used in tests. Production status reads come from job_runs DB table.

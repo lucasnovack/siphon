@@ -483,6 +483,40 @@ async def _run_job_inner(
                 new_hash=job.schema_hash[:8],
             )
 
+        # Row count drift detection (alert on massive drops, e.g. table truncated in full_refresh)
+        prev_rows = getattr(job, "pipeline_prev_rows", None)
+        if prev_rows is None and job.pipeline_dq:
+            prev_rows = job.pipeline_dq.get("prev_rows")
+
+        if prev_rows is not None and prev_rows > 0:
+            drop_pct = (1.0 - (rows_read / prev_rows)) * 100.0
+            if rows_read == 0:
+                msg = (
+                    f"CRITICAL ROW DRIFT: Extracted 0 rows in {getattr(job, 'pipeline_extraction_mode', 'full_refresh')}, "
+                    f"but previous run extracted {prev_rows:,} rows (100% drop). "
+                    "Source table may have been truncated or emptied."
+                )
+                job.logs.append(f"WARNING: {msg}")
+                logger.warning(
+                    "row_drift_zero_rows_detected",
+                    pipeline_id=job.pipeline_id,
+                    prev_rows=prev_rows,
+                    rows_read=rows_read,
+                )
+            elif drop_pct >= 50.0 and getattr(job, "pipeline_extraction_mode", "full_refresh") == "full_refresh":
+                msg = (
+                    f"Row count drift detected for pipeline {job.pipeline_id}: "
+                    f"extracted {rows_read:,} rows vs {prev_rows:,} in previous run ({drop_pct:.1f}% drop)."
+                )
+                job.logs.append(f"WARNING: {msg}")
+                logger.warning(
+                    "row_drift_detected",
+                    pipeline_id=job.pipeline_id,
+                    prev_rows=prev_rows,
+                    rows_read=rows_read,
+                    drop_pct=drop_pct,
+                )
+
     except TimeoutError:
         job.status = "failed"
         job.error = f"Job exceeded timeout of {timeout}s"

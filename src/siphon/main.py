@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 import structlog
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -410,9 +410,16 @@ async def metrics_endpoint(
 _FRONTEND_DIR = os.getenv("SIPHON_FRONTEND_DIR", "/app/frontend/dist")
 
 if os.path.isdir(_FRONTEND_DIR):
-    # Serve JS/CSS/assets normally; fall back to index.html for unknown paths
-    # so React Router can handle client-side navigation.
-    app.mount("/", StaticFiles(directory=_FRONTEND_DIR, html=True), name="spa")
+    assets_dir = os.path.join(_FRONTEND_DIR, "assets")
+    if os.path.isdir(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def _serve_spa(full_path: str):  # noqa: ARG001
+        file_path = os.path.join(_FRONTEND_DIR, full_path)
+        if full_path and os.path.isfile(file_path):
+            return FileResponse(file_path)
+        return FileResponse(os.path.join(_FRONTEND_DIR, "index.html"))
 else:
 
     @app.get("/{full_path:path}", include_in_schema=False)
