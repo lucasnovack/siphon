@@ -251,3 +251,50 @@ async def test_run_job_dq_failure_marks_failed_no_write():
     assert job.status == "failed"
     assert "Data quality" in job.error
     dest.write.assert_not_called()
+
+
+# ── Row count drift detection ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_run_job_warns_on_critical_zero_rows_drift():
+    src = MagicMock()
+    src.extract_batches.return_value = iter([pa.table({"id": []})])
+    dest = MagicMock()
+    dest.write.side_effect = lambda b, is_first_chunk=True: b.num_rows
+
+    job = Job(
+        job_id="j9",
+        pipeline_id="pipe-1",
+        pipeline_prev_rows=50000,
+        pipeline_extraction_mode="full_refresh",
+    )
+    executor = ThreadPoolExecutor(max_workers=1)
+    await run_job(src, dest, job, executor, timeout=30)
+
+    assert job.status == "success"
+    assert any("CRITICAL ROW DRIFT" in log for log in job.logs)
+    assert any("50,000" in log for log in job.logs)
+
+
+@pytest.mark.asyncio
+async def test_run_job_warns_on_massive_drop_drift():
+    # 100 prev rows -> 30 current rows (70% drop)
+    table = pa.table({"id": list(range(30))})
+    src = MagicMock()
+    src.extract_batches.return_value = iter([table])
+    dest = MagicMock()
+    dest.write.side_effect = lambda b, is_first_chunk=True: b.num_rows
+
+    job = Job(
+        job_id="j10",
+        pipeline_id="pipe-2",
+        pipeline_prev_rows=100,
+        pipeline_extraction_mode="full_refresh",
+    )
+    executor = ThreadPoolExecutor(max_workers=1)
+    await run_job(src, dest, job, executor, timeout=30)
+
+    assert job.status == "success"
+    assert any("Row count drift detected" in log for log in job.logs)
+    assert any("70.0% drop" in log for log in job.logs)
