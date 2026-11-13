@@ -410,6 +410,20 @@ async def _async_trigger_pipeline(pipeline_id_str: str) -> None:
             logger.error("pipeline_invalid_config", pipeline_id=pipeline_id_str, error=str(exc))
             return
 
+        from sqlalchemy import desc, select
+
+        prev_run_query = await session.execute(
+            select(JobRun.rows_read)
+            .where(
+                JobRun.pipeline_id == pipeline_uuid,
+                JobRun.status == "success",
+                JobRun.rows_read > 0,
+            )
+            .order_by(desc(JobRun.finished_at))
+            .limit(1)
+        )
+        prev_rows = prev_run_query.scalar_one_or_none()
+
         has_dq = p.min_rows_expected is not None or p.max_rows_drop_pct is not None
         job = Job(
             job_id=str(uuid_mod.uuid4()),
@@ -423,8 +437,10 @@ async def _async_trigger_pipeline(pipeline_id_str: str) -> None:
             pipeline_dq={
                 "min_rows_expected": p.min_rows_expected,
                 "max_rows_drop_pct": p.max_rows_drop_pct,
-                "prev_rows": None,
+                "prev_rows": prev_rows,
             } if has_dq else None,
+            pipeline_prev_rows=prev_rows,
+            pipeline_extraction_mode=p.extraction_mode,
             priority=p.priority,
             source_connection_id=str(src_conn.id),
             destination_path=dest_path,

@@ -453,6 +453,19 @@ async def trigger_pipeline(
         logger.warning("pipeline_config_invalid", error=str(exc))
         raise HTTPException(400, "Operation failed — check server logs") from exc
 
+    # Fetch previous run's rows_read for drift and DQ checks
+    prev_run_query = await db.execute(
+        select(JobRun.rows_read)
+        .where(
+            JobRun.pipeline_id == pipeline_id,
+            JobRun.status == "success",
+            JobRun.rows_read > 0,
+        )
+        .order_by(desc(JobRun.finished_at))
+        .limit(1)
+    )
+    prev_rows = prev_run_query.scalar_one_or_none()
+
     has_dq = p.min_rows_expected is not None or p.max_rows_drop_pct is not None
     job = Job(
         job_id=str(uuid.uuid4()),
@@ -465,8 +478,10 @@ async def trigger_pipeline(
         pipeline_dq={
             "min_rows_expected": p.min_rows_expected,
             "max_rows_drop_pct": p.max_rows_drop_pct,
-            "prev_rows": None,
+            "prev_rows": prev_rows,
         } if has_dq else None,
+        pipeline_prev_rows=prev_rows,
+        pipeline_extraction_mode=p.extraction_mode,
         is_backfill=bool(body.date_from and body.date_to),
         pipeline_alert=(
             {"webhook_url": p.webhook_url, "alert_on": p.alert_on or ["failed"]}
