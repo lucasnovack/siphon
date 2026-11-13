@@ -110,6 +110,9 @@ async def _run_job_async(source, destination, job) -> None:
                     if run and run.status == "queued":
                         run.status = "running"
                         run.started_at = datetime.now(UTC)
+                        if not job.logs:
+                            job.logs.append(f"Job picked up by worker (job_id={job.job_id})")
+                        run.logs = list(job.logs)
                         await session.commit()
             except Exception:
                 pass  # best-effort — don't abort the job if status update fails
