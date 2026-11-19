@@ -30,10 +30,27 @@ class TestCastForDialect:
         expr = _cast_for_dialect("2024-01-01", "redshift")
         assert "TIMESTAMPTZ" in expr
 
-    def test_single_quote_in_watermark_is_escaped(self):
-        expr = _cast_for_dialect("2024-01-01T00:00:00'bad", "postgresql")
-        assert "''" in expr
-        assert "bad" in expr
+    def test_single_quote_in_watermark_raises_value_error(self):
+        with pytest.raises(ValueError, match="Invalid watermark"):
+            _cast_for_dialect("2024-01-01T00:00:00'bad", "postgresql")
+
+    def test_sql_injection_payload_in_watermark_raises(self):
+        with pytest.raises(ValueError, match="Invalid watermark"):
+            _cast_for_dialect("2024-01-01' OR '1'='1", "postgresql")
+
+    def test_invalid_calendar_date_raises(self):
+        with pytest.raises(ValueError, match="Invalid watermark"):
+            _cast_for_dialect("2024-13-45T00:00:00+00:00", "postgresql")
+
+    def test_valid_iso8601_variants_accepted(self):
+        assert "2024-01-01" in _cast_for_dialect("2024-01-01", "postgresql")
+        assert "2024-01-01 12:30:45" in _cast_for_dialect("2024-01-01 12:30:45", "postgresql")
+        assert "2024-01-01T12:30:45.123456Z" in _cast_for_dialect(
+            "2024-01-01T12:30:45.123456Z", "postgresql"
+        )
+        assert "2024-01-01T12:30:45-03:00" in _cast_for_dialect(
+            "2024-01-01T12:30:45-03:00", "postgresql"
+        )
 
     def test_sqlserver_alias(self):
         assert "DATETIMEOFFSET" in _cast_for_dialect("2024-01-01", "sqlserver")

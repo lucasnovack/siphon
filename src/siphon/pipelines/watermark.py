@@ -5,11 +5,18 @@ Wraps the original query in a CTE so the WHERE clause works regardless
 of whether the query already has its own WHERE, GROUP BY, ORDER BY, etc.
 """
 import re
+from datetime import datetime
 
 # Only plain SQL identifiers are allowed as watermark keys (letters, digits, underscores).
 # Dots are permitted for schema-qualified names (e.g. "schema.column").
 # This prevents SQL injection via the incremental_key field.
 _VALID_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
+
+# Strict ISO-8601 date or datetime pattern (e.g. "2024-01-01", "2024-01-01T00:00:00+00:00",
+# "2024-01-01 00:00:00.123456Z"). Prevents SQL injection via watermark values.
+_VALID_WATERMARK = re.compile(
+    r"^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})?)?$"
+)
 
 
 def _validate_key(key: str) -> None:
@@ -19,6 +26,21 @@ def _validate_key(key: str) -> None:
             f"Invalid incremental_key {key!r}: must be a plain SQL identifier "
             "(letters, digits, underscores, dots only — no spaces or special characters)."
         )
+
+
+def _validate_watermark(watermark: str) -> None:
+    """Validate that watermark is a strict ISO-8601 date or timestamp string."""
+    if not isinstance(watermark, str) or not _VALID_WATERMARK.match(watermark):
+        raise ValueError(
+            f"Invalid watermark {watermark!r}: must be an ISO-8601 date or timestamp "
+            "(e.g. '2024-01-01' or '2024-01-01T00:00:00+00:00')."
+        )
+    try:
+        datetime.fromisoformat(watermark.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid watermark {watermark!r}: not a valid calendar date/timestamp."
+        ) from exc
 
 
 def inject_watermark(query: str, key: str, watermark: str, dialect: str) -> str:
@@ -77,14 +99,13 @@ def inject_backfill_window(
 
 def _cast_for_dialect(watermark: str, dialect: str) -> str:
     """Return a dialect-specific CAST expression for *watermark*."""
+    _validate_watermark(watermark)
     d = dialect.lower()
-    # Escape single quotes inside the watermark value (defensive)
-    safe = watermark.replace("'", "''")
     if "mysql" in d:
-        return f"CAST('{safe}' AS DATETIME)"
+        return f"CAST('{watermark}' AS DATETIME)"
     if "oracle" in d:
-        return f"CAST('{safe}' AS TIMESTAMP WITH TIME ZONE)"
+        return f"CAST('{watermark}' AS TIMESTAMP WITH TIME ZONE)"
     if "mssql" in d or "sqlserver" in d:
-        return f"CAST('{safe}' AS DATETIMEOFFSET)"
+        return f"CAST('{watermark}' AS DATETIMEOFFSET)"
     # postgresql, default (covers "postgresql", "postgres", "redshift", …)
-    return f"CAST('{safe}' AS TIMESTAMPTZ)"
+    return f"CAST('{watermark}' AS TIMESTAMPTZ)"

@@ -124,12 +124,13 @@ def test_host_validation_allows_cidr_range():
 
 
 def test_host_validation_skipped_when_allowlist_empty():
-    """No allowlist configured → all hosts pass (permissive dev mode)."""
+    """No allowlist configured → all hosts pass in dev mode (SIPHON_DEV_MODE=true)."""
     import siphon.plugins.sources.sql as sql_mod
 
     table = pa.table({"x": [1]})
     with (
         patch.object(sql_mod, "_ALLOWED_HOSTS", ""),
+        patch.dict("os.environ", {"SIPHON_DEV_MODE": "true"}),
         patch("connectorx.read_sql", return_value=table),
     ):
         cls = get_source("sql")
@@ -137,6 +138,42 @@ def test_host_validation_skipped_when_allowlist_empty():
         result = src.extract()
 
     assert result.num_rows == 1
+
+
+def test_host_validation_fail_closed_in_production():
+    """No allowlist configured + SIPHON_DEV_MODE=false → connection rejected."""
+    import siphon.plugins.sources.sql as sql_mod
+
+    with (
+        patch.object(sql_mod, "_ALLOWED_HOSTS", ""),
+        patch.dict("os.environ", {"SIPHON_DEV_MODE": "false"}),
+    ):
+        cls = get_source("sql")
+        src = cls(connection="mysql://u:p@any.host/db", query="SELECT 1")
+        with pytest.raises(ValueError, match="fail-closed"):
+            src.extract()
+
+
+def test_validate_ssrf_config_raises_in_production_without_allowlist():
+    """validate_ssrf_config() raises RuntimeError in production when SIPHON_ALLOWED_HOSTS is empty."""
+    from siphon.plugins.sources.sql import validate_ssrf_config
+
+    with (
+        patch.dict("os.environ", {"SIPHON_ALLOWED_HOSTS": "", "SIPHON_DEV_MODE": "false"}),
+        pytest.raises(RuntimeError, match="SIPHON_ALLOWED_HOSTS"),
+    ):
+        validate_ssrf_config()
+
+
+def test_validate_ssrf_config_passes_with_allowlist_or_dev_mode():
+    """validate_ssrf_config() succeeds when allowlist is set or dev mode is enabled."""
+    from siphon.plugins.sources.sql import validate_ssrf_config
+
+    with patch.dict("os.environ", {"SIPHON_ALLOWED_HOSTS": "db.internal", "SIPHON_DEV_MODE": "false"}):
+        validate_ssrf_config()
+
+    with patch.dict("os.environ", {"SIPHON_ALLOWED_HOSTS": "", "SIPHON_DEV_MODE": "true"}):
+        validate_ssrf_config()
 
 
 # ── Oracle helpers ─────────────────────────────────────────────────────────────

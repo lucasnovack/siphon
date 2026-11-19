@@ -117,3 +117,100 @@ def test_celery_queue_submit_calls_apply_async():
     assert len(applied) == 1
     assert applied[0]["queue"] == "high"
     assert applied[0].get("task_id") == "j-1"
+
+
+async def test_run_job_async_raises_when_concurrency_limit_reached():
+    """_run_job_async raises ConcurrencyLimitReached when running jobs >= max_concurrent_jobs."""
+    import uuid
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    import pytest
+
+    from siphon.models import Job
+    from siphon.tasks import ConcurrencyLimitReached, _run_job_async
+
+    conn_id = str(uuid.uuid4())
+    job = Job(job_id="job-new", source_connection_id=conn_id)
+
+    mock_session = AsyncMock()
+    # 1st scalar: Connection.max_concurrent_jobs -> 2; 2nd scalar: running_count -> 2
+    mock_session.scalar = AsyncMock(side_effect=[2, 2])
+    mock_ctx = AsyncMock()
+    mock_ctx.__aenter__.return_value = mock_session
+    mock_factory = MagicMock(return_value=mock_ctx)
+    mock_engine = AsyncMock()
+
+    with (
+        patch.dict("os.environ", {"DATABASE_URL": "postgresql+asyncpg://u:p@localhost/db"}),
+        patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=mock_engine),
+        patch("sqlalchemy.ext.asyncio.async_sessionmaker", return_value=mock_factory),
+        patch("siphon.worker.run_job", new_callable=AsyncMock) as mock_run_job,
+    ):
+        with pytest.raises(ConcurrencyLimitReached, match="2/2"):
+            await _run_job_async(MagicMock(), MagicMock(), job, max_concurrent=2)
+        mock_run_job.assert_not_awaited()
+    mock_engine.dispose.assert_awaited_once()
+
+
+async def test_run_job_async_proceeds_when_below_concurrency_limit():
+    """_run_job_async runs the job when running jobs < max_concurrent_jobs."""
+    import uuid
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from siphon.models import Job
+    from siphon.tasks import _run_job_async
+
+    conn_id = str(uuid.uuid4())
+    job = Job(job_id="job-ok", source_connection_id=conn_id)
+
+    mock_session = AsyncMock()
+    # 1st scalar: Connection.max_concurrent_jobs -> 2; 2nd scalar: running_count -> 1
+    mock_session.scalar = AsyncMock(side_effect=[2, 1])
+    mock_exec_result = MagicMock()
+    mock_exec_result.scalar_one_or_none.return_value = None
+    mock_session.execute = AsyncMock(return_value=mock_exec_result)
+    mock_ctx = AsyncMock()
+    mock_ctx.__aenter__.return_value = mock_session
+    mock_factory = MagicMock(return_value=mock_ctx)
+    mock_engine = AsyncMock()
+
+    with (
+        patch.dict("os.environ", {"DATABASE_URL": "postgresql+asyncpg://u:p@localhost/db"}),
+        patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=mock_engine),
+        patch("sqlalchemy.ext.asyncio.async_sessionmaker", return_value=mock_factory),
+        patch("siphon.worker.run_job", new_callable=AsyncMock) as mock_run_job,
+    ):
+        await _run_job_async(MagicMock(), MagicMock(), job, max_concurrent=2)
+        mock_run_job.assert_awaited_once()
+    mock_engine.dispose.assert_awaited_once()
+
+
+def test_run_pipeline_task_retries_with_backoff_on_concurrency_limit():
+    """run_pipeline_task retries with exponential backoff when ConcurrencyLimitReached is raised."""
+    from unittest.mock import MagicMock, patch
+
+    import pytest
+
+    from siphon.models import Job
+    from siphon.tasks import ConcurrencyLimitReached, _job_to_dict, run_pipeline_task
+
+    class _RetryCalled(Exception):
+        pass
+
+    job_dict = _job_to_dict(Job(job_id="j-retry", source_connection_id="conn-1"))
+    fake_source_cls = MagicMock(return_value=MagicMock())
+    fake_dest_cls = MagicMock(return_value=MagicMock())
+
+    with (
+        patch("siphon.plugins.sources.get", return_value=fake_source_cls),
+        patch("siphon.plugins.destinations.get", return_value=fake_dest_cls),
+        patch("siphon.tasks._run_job_async", side_effect=ConcurrencyLimitReached("busy")),
+        patch.object(run_pipeline_task, "retry", side_effect=_RetryCalled()) as mock_retry,
+        pytest.raises(_RetryCalled),
+    ):
+        run_pipeline_task.run(job_dict, {"type": "sql"}, {"type": "s3_parquet"}, max_concurrent=1)
+
+    mock_retry.assert_called_once()
+    _, kwargs = mock_retry.call_args
+    assert kwargs["countdown"] == 15
+    assert kwargs["max_retries"] == 20

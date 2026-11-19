@@ -175,7 +175,9 @@ async def _create_admin_if_missing() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from siphon.auth.jwt_utils import validate_jwt_secret
+    from siphon.plugins.sources.sql import validate_ssrf_config
     validate_jwt_secret()
+    validate_ssrf_config()
     await _create_admin_if_missing()
     from siphon.scheduler import start_scheduler
     start_scheduler()

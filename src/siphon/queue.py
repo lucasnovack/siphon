@@ -46,9 +46,6 @@ class JobQueue:
         job: Job,
         source_config: dict,
         destination_config: dict,
-        # max_concurrent is accepted for API compatibility with callers that set
-        # per-connection limits. Celery's worker concurrency (--concurrency flag)
-        # now controls actual parallelism; this parameter has no effect.
         max_concurrent: int = 2,
     ) -> None:
         """Dispatch a job to the Celery queue matching job.priority."""
@@ -57,12 +54,15 @@ class JobQueue:
         try:
             run_pipeline_task.apply_async(
                 args=[_job_to_dict(job), source_config, destination_config],
+                kwargs={"max_concurrent": max_concurrent},
                 queue=queue_name,
                 task_id=job.job_id,
             )
         except Exception as exc:
             logger.error("Failed to enqueue job via Celery", job_id=job.job_id, error=str(exc))
-            raise HTTPException(status_code=503, detail=f"Queue unavailable: {exc}") from exc
+            raise HTTPException(
+                status_code=503, detail="Queue unavailable — check server logs"
+            ) from exc
 
         logger.info("Job dispatched to Celery", job_id=job.job_id, queue=queue_name)
 

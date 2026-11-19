@@ -10,11 +10,11 @@ Design decisions:
   each schedule upsert/delete; they gracefully no-op when DATABASE_URL is absent.
 """
 
+import asyncio
 import os
 import uuid
 from datetime import UTC, datetime, timedelta
 
-import asyncio
 import structlog
 
 logger = structlog.get_logger()

@@ -43,15 +43,25 @@ async def test_submit_uses_low_queue_for_low_priority(q):
     assert kwargs["queue"] == "low"
 
 
+async def test_submit_forwards_max_concurrent_kwarg(q):
+    job = Job(job_id="j-conc", priority="normal")
+    with patch("siphon.queue.run_pipeline_task") as mock_task:
+        mock_task.apply_async = MagicMock()
+        await q.submit(job, {}, {}, max_concurrent=5)
+    _, kwargs = mock_task.apply_async.call_args
+    assert kwargs["kwargs"] == {"max_concurrent": 5}
+
+
 async def test_submit_raises_503_when_celery_unreachable(q):
-    """If apply_async raises, submit() must raise HTTP 503."""
+    """If apply_async raises, submit() must raise HTTP 503 without leaking internals."""
     from fastapi import HTTPException
     job = Job(job_id="j-err", priority="normal")
     with patch("siphon.queue.run_pipeline_task") as mock_task:
-        mock_task.apply_async = MagicMock(side_effect=Exception("Redis down"))
+        mock_task.apply_async = MagicMock(side_effect=Exception("redis://secret@host:6379 down"))
         with pytest.raises(HTTPException) as exc_info:
             await q.submit(job, {}, {})
     assert exc_info.value.status_code == 503
+    assert "secret" not in exc_info.value.detail
 
 
 async def test_get_job_returns_none(q):

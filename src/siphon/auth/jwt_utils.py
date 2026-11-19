@@ -6,9 +6,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import jwt as pyjwt
-from passlib.context import CryptContext
-
 import structlog as _structlog
+from passlib.context import CryptContext
 
 _JWT_SECRET_DEFAULT = "dev-secret-change-in-production"
 _JWT_SECRET: str = os.getenv("SIPHON_JWT_SECRET", _JWT_SECRET_DEFAULT)

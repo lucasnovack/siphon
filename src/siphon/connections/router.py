@@ -11,8 +11,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-logger = structlog.get_logger(__name__)
-
 from siphon.auth.deps import Principal, get_current_principal
 from siphon.auth.router import limiter
 from siphon.crypto import decrypt, encrypt
@@ -20,6 +18,7 @@ from siphon.db import get_db
 from siphon.orm import Connection
 from siphon.plugins.sources.sql import _validate_host
 
+logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/api/v1/connections", tags=["connections"])
 
 ConnType = Literal["sql", "sftp", "s3_parquet"]

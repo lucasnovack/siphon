@@ -14,6 +14,8 @@ services:
       SIPHON_MAX_WORKERS: ${SIPHON_MAX_WORKERS}
       SIPHON_ALLOWED_S3_PREFIX: ${SIPHON_ALLOWED_S3_PREFIX}
       SIPHON_S3_SCHEME: ${SIPHON_S3_SCHEME}
+      SIPHON_ALLOWED_HOSTS: ${SIPHON_ALLOWED_HOSTS:-}
+      SIPHON_DEV_MODE: ${SIPHON_DEV_MODE:-false}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -50,6 +52,8 @@ services:
       SIPHON_ENCRYPTION_KEY: ${SIPHON_ENCRYPTION_KEY}
       SIPHON_ALLOWED_S3_PREFIX: ${SIPHON_ALLOWED_S3_PREFIX}
       SIPHON_S3_SCHEME: ${SIPHON_S3_SCHEME}
+      SIPHON_ALLOWED_HOSTS: ${SIPHON_ALLOWED_HOSTS:-}
+      SIPHON_DEV_MODE: ${SIPHON_DEV_MODE:-false}
       REDIS_URL: ${REDIS_URL}
     extra_hosts:
       - "host.docker.internal:host-gateway"

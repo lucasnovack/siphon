@@ -34,13 +34,23 @@ def _job_from_dict(d: dict) -> Job:
     return Job(**{k: v for k, v in d.items() if k in valid_fields})
 
 
+class ConcurrencyLimitReached(Exception):
+    """Raised when a connection already has max_concurrent_jobs running."""
+
+
 @app.task(
     bind=True,
     name="siphon.tasks.run_pipeline_task",
     max_retries=3,
     default_retry_delay=30,
 )
-def run_pipeline_task(self, job_dict: dict, source_dict: dict, destination_dict: dict) -> None:
+def run_pipeline_task(
+    self,
+    job_dict: dict,
+    source_dict: dict,
+    destination_dict: dict,
+    max_concurrent: int | None = None,
+) -> None:
     """Celery task: reconstruct Job + plugins, call run_job(), persist result.
 
     Uses a single asyncio.run() call with a fresh engine per task to avoid
@@ -68,13 +78,28 @@ def run_pipeline_task(self, job_dict: dict, source_dict: dict, destination_dict:
     destination = dest_cls(**destination_dict, job_id=job.job_id)
 
     try:
-        asyncio.run(_run_job_async(source, destination, job))
+        asyncio.run(_run_job_async(source, destination, job, max_concurrent=max_concurrent))
+    except ConcurrencyLimitReached as exc:
+        delay = min(15 * (2 ** self.request.retries), 120)
+        logger.warning(
+            "concurrency_limit_reached_retrying",
+            job_id=job.job_id,
+            source_connection_id=job.source_connection_id,
+            countdown=delay,
+            retries=self.request.retries,
+        )
+        raise self.retry(exc=exc, countdown=delay, max_retries=20) from exc
     except Exception as exc:
         logger.error("Task failed, retrying", error=str(exc))
         raise self.retry(exc=exc) from exc
 
 
-async def _run_job_async(source, destination, job) -> None:
+async def _run_job_async(
+    source,
+    destination,
+    job,
+    max_concurrent: int | None = None,
+) -> None:
     """Async wrapper: creates a fresh DB engine per task, runs the job, disposes engine.
 
     A fresh engine is required because Celery prefork workers share module state
@@ -82,24 +107,47 @@ async def _run_job_async(source, destination, job) -> None:
     event loop causes 'Future attached to a different loop' errors.
     """
     import os
+    import uuid
     from concurrent.futures import ThreadPoolExecutor
     from datetime import UTC, datetime
 
-    from sqlalchemy import select
+    from sqlalchemy import func, select
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
     from siphon import worker
-    from siphon.orm import JobRun
+    from siphon.orm import Connection, JobRun
 
     db_url = os.getenv("DATABASE_URL")
     engine = create_async_engine(db_url, pool_pre_ping=True) if db_url else None
     db_factory = async_sessionmaker(engine, expire_on_commit=False) if engine else None
 
     try:
-        # Mark job as running
+        # Check per-connection concurrency limit and mark job as running
         if db_factory:
             try:
                 async with db_factory() as session:
+                    if job.source_connection_id:
+                        conn_uuid = uuid.UUID(job.source_connection_id)
+                        conn_limit = await session.scalar(
+                            select(Connection.max_concurrent_jobs)
+                            .where(Connection.id == conn_uuid)
+                            .with_for_update()
+                        )
+                        effective_limit = conn_limit if conn_limit is not None else max_concurrent
+                        if effective_limit is not None and effective_limit >= 1:
+                            running_count = await session.scalar(
+                                select(func.count(JobRun.id)).where(
+                                    JobRun.source_connection_id == conn_uuid,
+                                    JobRun.status == "running",
+                                    JobRun.job_id != job.job_id,
+                                )
+                            )
+                            if (running_count or 0) >= effective_limit:
+                                raise ConcurrencyLimitReached(
+                                    f"Connection {job.source_connection_id} reached "
+                                    f"max_concurrent_jobs ({running_count}/{effective_limit})"
+                                )
+
                     result = await session.execute(
                         select(JobRun)
                         .where(JobRun.job_id == job.job_id)
@@ -114,6 +162,8 @@ async def _run_job_async(source, destination, job) -> None:
                             job.logs.append(f"Job picked up by worker (job_id={job.job_id})")
                         run.logs = list(job.logs)
                         await session.commit()
+            except ConcurrencyLimitReached:
+                raise
             except Exception:
                 pass  # best-effort — don't abort the job if status update fails
 

@@ -9,7 +9,6 @@ import pyarrow as pa
 import structlog
 
 from siphon import variables
-from siphon.models import mask_uri
 from siphon.plugins.sources import register
 from siphon.plugins.sources.base import Source
 from siphon.utils.retry import _with_retry
@@ -192,15 +191,40 @@ def _inject_timeout(conn: str) -> str:
     return conn
 
 
+def validate_ssrf_config() -> None:
+    """Call at application startup to enforce SIPHON_ALLOWED_HOSTS in production."""
+    allowed = os.getenv("SIPHON_ALLOWED_HOSTS", "").strip()
+    dev_mode = os.getenv("SIPHON_DEV_MODE", "false").lower() == "true"
+    if not allowed:
+        if dev_mode:
+            logger.warning(
+                "ssrf_protection_disabled",
+                warning="SIPHON_ALLOWED_HOSTS is not set — all outbound hosts are allowed (dev mode only).",
+            )
+        else:
+            raise RuntimeError(
+                "SIPHON_ALLOWED_HOSTS is not set. "
+                "Configure a comma-separated allowlist of hosts/CIDRs or enable SIPHON_DEV_MODE=true for development."
+            )
+
+
 def _validate_host(conn: str) -> None:
-    """Reject connections to hosts outside the allowlist. Mitigates SSRF."""
+    """Reject connections to hosts outside the allowlist. Mitigates SSRF.
+
+    Fail-closed by default: when SIPHON_ALLOWED_HOSTS is empty, connections are
+    rejected unless SIPHON_DEV_MODE=true is explicitly set.
+    """
     if not _ALLOWED_HOSTS:
-        return
+        if os.getenv("SIPHON_DEV_MODE", "false").lower() == "true":
+            return
+        raise ValueError(
+            "SIPHON_ALLOWED_HOSTS is not configured. Outbound connection rejected (fail-closed)."
+        )
 
     host = urlparse(conn).hostname
     if host is None:
         raise ValueError("Cannot parse hostname from connection string. Connection rejected.")
-    allowed = [h.strip() for h in _ALLOWED_HOSTS.split(",")]
+    allowed = [h.strip() for h in _ALLOWED_HOSTS.split(",") if h.strip()]
 
     for entry in allowed:
         try:
