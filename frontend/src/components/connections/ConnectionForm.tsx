@@ -145,7 +145,7 @@ export function ConnectionForm({
       {editing ? (
         <div className="flex items-center justify-between rounded-xl border border-border/80 bg-secondary/35 px-4 py-3">
           <div className="flex items-center gap-3">
-            <EngineLogo type={selectedType} name={watchedName} size="md" />
+            <EngineLogo type={selectedType} name={watchedName || dynamicFields.connection} size="md" />
             <div>
               <div className="flex items-center gap-2">
                 <span className="text-xs font-semibold">{currentMeta.engineName}</span>

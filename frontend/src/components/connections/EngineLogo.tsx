@@ -17,19 +17,29 @@ export interface ConnectorMeta {
 
 export function detectSqlDialect(nameOrUri = ''): SqlDialectHint {
   const s = nameOrUri.toLowerCase()
-  if (s.includes('postgres') || s.includes('pg') || s.includes('supabase') || s.includes('neon')) {
+  if (
+    s.includes('postgres') ||
+    s.includes('pgsql') ||
+    s.includes('postgresql') ||
+    s.includes('pg_') ||
+    s.includes('_pg') ||
+    s.includes('supabase') ||
+    s.includes('neon') ||
+    s.includes('cockroach') ||
+    s.includes('redshift')
+  ) {
     return 'postgresql'
   }
-  if (s.includes('mysql') || s.includes('maria')) {
+  if (s.includes('mysql') || s.includes('maria') || s.includes('mariadb') || s.includes('tidb') || s.includes('percona')) {
     return 'mysql'
   }
-  if (s.includes('oracle') || s.includes('ora')) {
+  if (s.includes('oracle') || s.includes('orcl') || s.includes('ora_') || s.includes('_ora')) {
     return 'oracle'
   }
-  if (s.includes('mssql') || s.includes('sqlserver') || s.includes('azure')) {
+  if (s.includes('mssql') || s.includes('sqlserver') || s.includes('sql_server') || s.includes('azure_sql') || s.includes('tsql')) {
     return 'mssql'
   }
-  if (s.includes('sqlite')) {
+  if (s.includes('sqlite') || s.includes('sqlite3')) {
     return 'sqlite'
   }
   return 'generic'
@@ -41,7 +51,7 @@ const SQL_DIALECT_LABELS: Record<SqlDialectHint, string> = {
   oracle: 'Oracle',
   mssql: 'SQL Server',
   sqlite: 'SQLite',
-  generic: 'PostgreSQL / SQL',
+  generic: 'SQL Database',
 }
 
 export function getConnectorMeta(type: string, connectionName = ''): ConnectorMeta {
@@ -51,10 +61,10 @@ export function getConnectorMeta(type: string, connectionName = ''): ConnectorMe
       return {
         type: 'sql',
         role: 'source',
-        title: 'SQL Database',
+        title: dialect === 'generic' ? 'SQL Database' : SQL_DIALECT_LABELS[dialect],
         engineName: SQL_DIALECT_LABELS[dialect],
         summary: 'PostgreSQL, MySQL, Oracle, SQL Server',
-        protocolHint: 'postgresql:// · mysql:// · oracle://',
+        protocolHint: 'postgresql:// · mysql:// · oracle:// · mssql://',
         dialect,
       }
     }
@@ -145,8 +155,32 @@ export function EngineLogo({ type, name = '', size = 'md', className }: EngineLo
 /* ── Recognizable Brand Vector Logos ─────────────────────────────────────── */
 
 function SqlBrandLogo({ dialect, className }: { dialect: SqlDialectHint; className?: string }) {
+  if (dialect === 'postgresql') {
+    // PostgreSQL elephant shield & tusks in official Postgres Blue (#336791)
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+        <path
+          d="M12 3.5c-4.4 0-7.5 2.4-7.5 6.2 0 2.4 1.3 4.3 3.2 5.1V18c0 1.4 1.1 2.5 2.5 2.5.9 0 1.7-.5 2.1-1.2.4.7 1.2 1.2 2.1 1.2 1.4 0 2.5-1.1 2.5-2.5v-2.2c1.6-.9 2.6-2.7 2.6-5.1 0-3.8-3.1-7.2-7.5-7.2Z"
+          fill="#336791"
+          fillOpacity="0.18"
+          stroke="#336791"
+          strokeWidth="1.65"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M12 8.5v7.5c0 1.1.7 2 1.7 2s1.7-.8 1.7-1.8"
+          stroke="#336791"
+          strokeWidth="1.65"
+          strokeLinecap="round"
+        />
+        <circle cx="9.6" cy="9.8" r="1" fill="#336791" />
+        <circle cx="14.6" cy="9.8" r="1" fill="#336791" />
+      </svg>
+    )
+  }
+
   if (dialect === 'mysql') {
-    // MySQL brand teal/orange mark
+    // MySQL brand dolphin in official teal (#00758F) with orange sun (#F29111)
     return (
       <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
         <path
@@ -174,32 +208,103 @@ function SqlBrandLogo({ dialect, className }: { dialect: SqlDialectHint; classNa
           rx="4.5"
           stroke="#F80000"
           strokeWidth="2.1"
+          fill="#F80000"
+          fillOpacity="0.12"
         />
       </svg>
     )
   }
 
-  // Default / PostgreSQL elephant shield + database mark in Postgres Blue (#336791)
+  if (dialect === 'mssql') {
+    // Microsoft SQL Server database cylinder + 4-quadrant Microsoft brand badge
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+        <ellipse
+          cx="11"
+          cy="6.2"
+          rx="6.5"
+          ry="2.6"
+          fill="#CC292B"
+          fillOpacity="0.14"
+          stroke="#CC292B"
+          strokeWidth="1.6"
+        />
+        <path
+          d="M4.5 6.2v10.5c0 1.44 2.91 2.6 6.5 2.6.7 0 1.38-.04 2-.13"
+          stroke="#CC292B"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+        />
+        <path
+          d="M17.5 6.2v4.8"
+          stroke="#CC292B"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+        />
+        <path
+          d="M4.5 11.4c0 1.44 2.91 2.6 6.5 2.6 1.4 0 2.7-.18 3.8-.5"
+          stroke="#CC292B"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+        />
+        {/* Microsoft 4-square badge */}
+        <rect x="15" y="13" width="3" height="3" rx="0.4" fill="#F25022" />
+        <rect x="18.5" y="13" width="3" height="3" rx="0.4" fill="#7FBA00" />
+        <rect x="15" y="16.5" width="3" height="3" rx="0.4" fill="#00A4EF" />
+        <rect x="18.5" y="16.5" width="3" height="3" rx="0.4" fill="#FFB900" />
+      </svg>
+    )
+  }
+
+  if (dialect === 'sqlite') {
+    // SQLite feather quill
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+        <path
+          d="M19.5 3.8c-3 1-8.2 4.8-11.2 10.6l-1 4.2 4.2-1c5.8-3 9.6-8.2 10.6-11.2-.4-1.6-1-2.2-2.6-2.6Z"
+          fill="#003B57"
+          fillOpacity="0.16"
+          stroke="#003B57"
+          strokeWidth="1.6"
+          strokeLinejoin="round"
+        />
+        <path
+          d="m7.3 18.6 7-7M10.8 10.3l-2.6.9M14.3 6.8l-2.6.9"
+          stroke="#0080CD"
+          strokeWidth="1.4"
+          strokeLinecap="round"
+        />
+        <circle cx="5" cy="20.5" r="1.1" fill="#0080CD" />
+      </svg>
+    )
+  }
+
+  // Generic / Default SQL Database — clean relational database cylinder stack
   return (
     <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-      {/* Postgres blue elephant ear + trunk silhouette */}
-      <path
-        d="M12 3.5c-4.4 0-7.5 2.4-7.5 6.2 0 2.4 1.3 4.3 3.2 5.1V18c0 1.4 1.1 2.5 2.5 2.5.9 0 1.7-.5 2.1-1.2.4.7 1.2 1.2 2.1 1.2 1.4 0 2.5-1.1 2.5-2.5v-2.2c1.6-.9 2.6-2.7 2.6-5.1 0-3.8-3.1-7.2-7.5-7.2Z"
-        fill="#336791"
-        fillOpacity="0.18"
-        stroke="#336791"
+      <ellipse
+        cx="12"
+        cy="6.2"
+        rx="7.5"
+        ry="2.8"
+        fill="#2563EB"
+        fillOpacity="0.14"
+        stroke="#2563EB"
         strokeWidth="1.65"
-        strokeLinejoin="round"
       />
-      {/* Trunk & tusks */}
       <path
-        d="M12 8.5v7.5c0 1.1.7 2 1.7 2s1.7-.8 1.7-1.8"
-        stroke="#336791"
+        d="M4.5 6.2v11.6c0 1.55 3.36 2.8 7.5 2.8s7.5-1.25 7.5-2.8V6.2"
+        stroke="#2563EB"
         strokeWidth="1.65"
         strokeLinecap="round"
       />
-      <circle cx="9.6" cy="9.8" r="1" fill="#336791" />
-      <circle cx="14.6" cy="9.8" r="1" fill="#336791" />
+      <path
+        d="M4.5 12c0 1.55 3.36 2.8 7.5 2.8s7.5-1.25 7.5-2.8"
+        stroke="#2563EB"
+        strokeWidth="1.65"
+        strokeLinecap="round"
+      />
+      <circle cx="12" cy="6.2" r="1.1" fill="#2563EB" />
     </svg>
   )
 }
