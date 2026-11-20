@@ -216,6 +216,14 @@ def test_run_pipeline_task_retries_with_backoff_on_concurrency_limit():
     assert kwargs["max_retries"] == 20
 
 
+def test_celery_app_has_preview_queue_and_task():
+    """Celery app must declare the isolated 'preview' queue and register run_preview_task."""
+    from siphon.celery_app import app
+    queue_names = {q.name for q in app.conf.task_queues}
+    assert "preview" in queue_names
+    assert "siphon.tasks.run_preview_task" in app.tasks
+
+
 async def test_run_job_async_uses_nullpool_and_redis_semaphore():
     """_run_job_async uses NullPool and acquires/releases a Redis slot when REDIS_URL is set."""
     import uuid

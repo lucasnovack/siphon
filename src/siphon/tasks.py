@@ -333,3 +333,47 @@ async def _update_gdpr_event(event_id: str, result: dict) -> None:
                 await session.commit()
     finally:
         await engine.dispose()
+
+
+def _json_safe(value):
+    """Convert non-JSON-native SQL/Arrow Python values for Celery JSON transport."""
+    import uuid
+    from datetime import date, datetime, time
+    from decimal import Decimal
+
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, uuid.UUID):
+        return str(value)
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value).decode("utf-8", errors="replace")
+    return str(value)
+
+
+def execute_preview_sql(connection_str: str, limited_query: str) -> dict:
+    """Run a bounded preview SQL query via ConnectorX and return a JSON-safe payload."""
+    import connectorx as cx
+
+    from siphon.plugins.sources.sql import _validate_host
+
+    _validate_host(connection_str)
+    table = cx.read_sql(connection_str, limited_query, return_type="arrow")
+    d = table.to_pydict()
+    columns = list(d.keys())
+    rows = [[_json_safe(d[col][i]) for col in columns] for i in range(table.num_rows)]
+    return {"columns": columns, "rows": rows, "row_count": table.num_rows}
+
+
+@app.task(
+    name="siphon.tasks.run_preview_task",
+    queue="preview",
+    soft_time_limit=20,
+    time_limit=25,
+)
+def run_preview_task(connection_str: str, limited_query: str) -> dict:
+    """Celery task executed on the isolated 'preview' queue."""
+    return execute_preview_sql(connection_str, limited_query)

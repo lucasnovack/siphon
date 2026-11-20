@@ -21,6 +21,7 @@ app.conf.update(
         Queue("high"),
         Queue("normal"),
         Queue("low"),
+        Queue("preview"),
     ),
     task_default_queue="normal",
     broker_connection_retry_on_startup=True,

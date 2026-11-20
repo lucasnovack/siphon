@@ -2,9 +2,11 @@
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import siphon.preview.router as pr_module
 from siphon.auth.deps import Principal
 
 
@@ -21,10 +23,6 @@ def _make_conn(conn_type="sql"):
     c.conn_type = conn_type
     c.encrypted_config = b"encrypted"
     return c
-
-
-import pytest
-import siphon.preview.router as pr_module
 
 
 @pytest.fixture()
@@ -71,25 +69,113 @@ def test_preview_invalid_connection_id_returns_400(client):
 
 def test_preview_runs_query_and_returns_rows(client):
     import json as _json
+
     import pyarrow as pa
+
     tc, db = client
     conn = _make_conn()
     db.get = AsyncMock(return_value=conn)
     fake_table = pa.table({"id": [1, 2], "name": ["a", "b"]})
 
-    with patch("siphon.crypto.decrypt", return_value=_json.dumps({"connection": "mysql://u:p@host/db"}).encode()):
-        with patch("siphon.plugins.sources.sql._validate_host"):
-            with patch("connectorx.read_sql", return_value=fake_table):
-                resp = tc.post("/api/v1/preview", json={
-                    "connection_id": str(conn.id),
-                    "query": "SELECT * FROM orders",
-                })
+    with (
+        patch.dict("os.environ", {"SIPHON_PREVIEW_MODE": "thread"}),
+        patch("siphon.crypto.decrypt", return_value=_json.dumps({"connection": "mysql://u:p@host/db"}).encode()),
+        patch("siphon.plugins.sources.sql._validate_host"),
+        patch("connectorx.read_sql", return_value=fake_table),
+    ):
+        resp = tc.post("/api/v1/preview", json={
+            "connection_id": str(conn.id),
+            "query": "SELECT * FROM orders",
+        })
     assert resp.status_code == 200
     body = resp.json()
     assert isinstance(body["rows"], list)
     assert len(body["rows"]) == 2
     assert body["row_count"] == 2
     assert "id" in body["columns"]
+
+
+def test_preview_celery_mode_dispatches_to_preview_queue(client):
+    import json as _json
+    tc, db = client
+    conn = _make_conn()
+    db.get = AsyncMock(return_value=conn)
+
+    mock_async_result = MagicMock()
+    mock_async_result.get.return_value = {
+        "columns": ["id"],
+        "rows": [[1]],
+        "row_count": 1,
+    }
+
+    with (
+        patch.dict("os.environ", {"SIPHON_PREVIEW_MODE": "celery"}),
+        patch("siphon.crypto.decrypt", return_value=_json.dumps({"connection": "mysql://u:p@host/db"}).encode()),
+        patch("siphon.plugins.sources.sql._validate_host"),
+        patch("siphon.tasks.run_preview_task.apply_async", return_value=mock_async_result) as mock_apply,
+    ):
+        resp = tc.post("/api/v1/preview", json={
+            "connection_id": str(conn.id),
+            "query": "SELECT id FROM orders",
+        })
+
+    assert resp.status_code == 200
+    assert resp.json() == {"columns": ["id"], "rows": [[1]], "row_count": 1}
+    mock_apply.assert_called_once()
+    assert mock_apply.call_args.kwargs["queue"] == "preview"
+
+
+def test_preview_celery_timeout_revokes_task_and_returns_504(client):
+    import json as _json
+
+    from celery.exceptions import TimeoutError as CeleryTimeoutError
+
+    tc, db = client
+    conn = _make_conn()
+    db.get = AsyncMock(return_value=conn)
+
+    mock_async_result = MagicMock()
+    mock_async_result.get.side_effect = CeleryTimeoutError("timed out")
+
+    with (
+        patch.dict("os.environ", {"SIPHON_PREVIEW_MODE": "celery", "SIPHON_PREVIEW_TIMEOUT": "1"}),
+        patch("siphon.crypto.decrypt", return_value=_json.dumps({"connection": "mysql://u:p@host/db"}).encode()),
+        patch("siphon.plugins.sources.sql._validate_host"),
+        patch("siphon.tasks.run_preview_task.apply_async", return_value=mock_async_result),
+    ):
+        resp = tc.post("/api/v1/preview", json={
+            "connection_id": str(conn.id),
+            "query": "SELECT pg_sleep(30)",
+        })
+
+    assert resp.status_code == 504
+    mock_async_result.revoke.assert_called_once_with(terminate=True)
+
+
+def test_preview_thread_timeout_returns_504(client):
+    import json as _json
+    import time
+
+    tc, db = client
+    conn = _make_conn()
+    db.get = AsyncMock(return_value=conn)
+
+    def _slow_query(*_args, **_kwargs):
+        time.sleep(0.5)
+        return {"columns": [], "rows": [], "row_count": 0}
+
+    with (
+        patch.dict("os.environ", {"SIPHON_PREVIEW_MODE": "thread", "SIPHON_PREVIEW_TIMEOUT": "0.05"}),
+        patch("siphon.crypto.decrypt", return_value=_json.dumps({"connection": "mysql://u:p@host/db"}).encode()),
+        patch("siphon.plugins.sources.sql._validate_host"),
+        patch("siphon.tasks.execute_preview_sql", side_effect=_slow_query),
+    ):
+        resp = tc.post("/api/v1/preview", json={
+            "connection_id": str(conn.id),
+            "query": "SELECT pg_sleep(30)",
+        })
+
+    assert resp.status_code == 504
 
 
 class TestApplyLimit:
