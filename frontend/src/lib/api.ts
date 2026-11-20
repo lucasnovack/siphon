@@ -87,6 +87,7 @@ export interface Connection {
   name: string
   type: 'sql' | 'sftp' | 's3_parquet' | 'gcs_parquet'
   key_version: number
+  max_concurrent_jobs?: number
   created_at: string
   updated_at: string
 }

@@ -266,17 +266,20 @@ async def test_connection(
     _: Principal = Depends(get_current_principal),  # noqa: B008
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ) -> dict:
+    import time
+
     conn = await db.get(Connection, conn_id)
     if conn is None or conn.deleted_at is not None:
         raise HTTPException(404, "Connection not found")
     config = json.loads(decrypt(conn.encrypted_config))
     loop = asyncio.get_running_loop()
+    t0 = time.monotonic()
     try:
         await loop.run_in_executor(None, _test_connection, conn.conn_type, config)
     except Exception as exc:
         logger.warning("connection_test_failed", error=str(exc))
         raise HTTPException(400, "Connection test failed — check server logs") from exc
-    return {"status": "ok"}
+    return {"status": "ok", "ok": True, "latency_ms": round((time.monotonic() - t0) * 1000)}
 
 
 # ── Connection types metadata ─────────────────────────────────────────────────
