@@ -68,7 +68,7 @@
   }
 
   body {
-    @apply bg-background text-foreground font-sans text-[13.5px] leading-relaxed selection:bg-foreground/15 selection:text-foreground;
+    @apply bg-background text-foreground font-sans text-[15px] leading-normal selection:bg-foreground/15 selection:text-foreground;
   }
 
   /* Subtle macOS-style scrollbars */
