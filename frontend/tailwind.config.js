@@ -46,6 +46,15 @@ export default {
           foreground: 'hsl(var(--warning-foreground))',
         },
       },
+      fontFamily: {
+        sans: ['"JetBrains Mono"', '-apple-system', 'BlinkMacSystemFont', 'ui-monospace', 'SFMono-Regular', 'monospace'],
+        mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'monospace'],
+      },
+      boxShadow: {
+        'apple-sm': '0 1px 2px 0 rgb(0 0 0 / 0.04), 0 0 0 1px rgb(0 0 0 / 0.02)',
+        'apple-md': '0 4px 16px -2px rgb(0 0 0 / 0.06), 0 1px 3px 0 rgb(0 0 0 / 0.04)',
+        'apple-lg': '0 20px 50px -12px rgb(0 0 0 / 0.14), 0 4px 16px -4px rgb(0 0 0 / 0.06)',
+      },
       borderRadius: {
         lg: 'var(--radius)',
         md: 'calc(var(--radius) - 2px)',
