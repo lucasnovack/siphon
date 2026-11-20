@@ -100,11 +100,10 @@ async def _run_job_async(
     job,
     max_concurrent: int | None = None,
 ) -> None:
-    """Async wrapper: creates a fresh DB engine per task, runs the job, disposes engine.
+    """Async wrapper: creates a fresh NullPool DB engine per task, runs the job, disposes engine.
 
-    A fresh engine is required because Celery prefork workers share module state
-    across tasks. Reusing an engine whose connection pool was bound to a previous
-    event loop causes 'Future attached to a different loop' errors.
+    A fresh NullPool engine is required because Celery prefork workers share module state
+    across tasks and should not hold idle pooled connections per task.
     """
     import os
     import uuid
@@ -116,11 +115,14 @@ async def _run_job_async(
     from sqlalchemy.pool import NullPool
 
     from siphon import worker
+    from siphon.concurrency import acquire_connection_slot, release_connection_slot
     from siphon.orm import Connection, JobRun
 
     db_url = os.getenv("DATABASE_URL")
     engine = create_async_engine(db_url, poolclass=NullPool) if db_url else None
     db_factory = async_sessionmaker(engine, expire_on_commit=False) if engine else None
+    job_timeout = int(os.getenv("SIPHON_JOB_TIMEOUT", "3600"))
+    redis_slot_acquired = False
 
     try:
         # Check per-connection concurrency limit and mark job as running
@@ -129,25 +131,47 @@ async def _run_job_async(
                 async with db_factory() as session:
                     if job.source_connection_id:
                         conn_uuid = uuid.UUID(job.source_connection_id)
-                        conn_limit = await session.scalar(
-                            select(Connection.max_concurrent_jobs)
-                            .where(Connection.id == conn_uuid)
-                            .with_for_update()
+                        use_redis = bool(os.getenv("REDIS_URL"))
+                        limit_stmt = select(Connection.max_concurrent_jobs).where(
+                            Connection.id == conn_uuid
                         )
+                        if not use_redis:
+                            limit_stmt = limit_stmt.with_for_update()
+
+                        conn_limit = await session.scalar(limit_stmt)
                         effective_limit = conn_limit if conn_limit is not None else max_concurrent
                         if effective_limit is not None and effective_limit >= 1:
-                            running_count = await session.scalar(
-                                select(func.count(JobRun.id)).where(
-                                    JobRun.source_connection_id == conn_uuid,
-                                    JobRun.status == "running",
-                                    JobRun.job_id != job.job_id,
+                            redis_result = None
+                            if use_redis:
+                                redis_result = await asyncio.to_thread(
+                                    acquire_connection_slot,
+                                    job.source_connection_id,
+                                    job.job_id,
+                                    effective_limit,
+                                    job_timeout + 60,
                                 )
-                            )
-                            if (running_count or 0) >= effective_limit:
-                                raise ConcurrencyLimitReached(
-                                    f"Connection {job.source_connection_id} reached "
-                                    f"max_concurrent_jobs ({running_count}/{effective_limit})"
+
+                            if redis_result is not None:
+                                acquired, running_count = redis_result
+                                if not acquired:
+                                    raise ConcurrencyLimitReached(
+                                        f"Connection {job.source_connection_id} reached "
+                                        f"max_concurrent_jobs ({running_count}/{effective_limit})"
+                                    )
+                                redis_slot_acquired = True
+                            else:
+                                running_count = await session.scalar(
+                                    select(func.count(JobRun.id)).where(
+                                        JobRun.source_connection_id == conn_uuid,
+                                        JobRun.status == "running",
+                                        JobRun.job_id != job.job_id,
+                                    )
                                 )
+                                if (running_count or 0) >= effective_limit:
+                                    raise ConcurrencyLimitReached(
+                                        f"Connection {job.source_connection_id} reached "
+                                        f"max_concurrent_jobs ({running_count}/{effective_limit})"
+                                    )
 
                     result = await session.execute(
                         select(JobRun)
@@ -169,11 +193,16 @@ async def _run_job_async(
                 pass  # best-effort — don't abort the job if status update fails
 
         max_workers = int(os.getenv("SIPHON_MAX_WORKERS", "1"))
-        job_timeout = int(os.getenv("SIPHON_JOB_TIMEOUT", "3600"))
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             await worker.run_job(source, destination, job, executor, job_timeout, db_factory=db_factory)
     finally:
+        if redis_slot_acquired and job.source_connection_id:
+            await asyncio.to_thread(
+                release_connection_slot,
+                job.source_connection_id,
+                job.job_id,
+            )
         if engine:
             await engine.dispose()
 
@@ -279,8 +308,8 @@ def purge_s3_data_task(
 async def _update_gdpr_event(event_id: str, result: dict) -> None:
     """Mark the gdpr_events row as completed with file/byte counts.
 
-    Creates a fresh async engine per call so that Celery prefork workers never
-    reuse a connection pool that was bound to a different event loop.
+    Creates a fresh NullPool async engine per call so that Celery prefork workers
+    never reuse a connection pool bound to a different event loop or hold idle connections.
     """
     import os
     import uuid as uuid_mod

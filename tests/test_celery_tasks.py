@@ -214,3 +214,87 @@ def test_run_pipeline_task_retries_with_backoff_on_concurrency_limit():
     _, kwargs = mock_retry.call_args
     assert kwargs["countdown"] == 15
     assert kwargs["max_retries"] == 20
+
+
+async def test_run_job_async_uses_nullpool_and_redis_semaphore():
+    """_run_job_async uses NullPool and acquires/releases a Redis slot when REDIS_URL is set."""
+    import uuid
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from sqlalchemy.pool import NullPool
+
+    from siphon.models import Job
+    from siphon.tasks import _run_job_async
+
+    conn_id = str(uuid.uuid4())
+    job = Job(job_id="job-redis", source_connection_id=conn_id)
+
+    mock_session = AsyncMock()
+    mock_session.scalar = AsyncMock(return_value=2)
+    mock_exec_result = MagicMock()
+    mock_exec_result.scalar_one_or_none.return_value = None
+    mock_session.execute = AsyncMock(return_value=mock_exec_result)
+    mock_ctx = AsyncMock()
+    mock_ctx.__aenter__.return_value = mock_session
+    mock_factory = MagicMock(return_value=mock_ctx)
+    mock_engine = AsyncMock()
+
+    env = {
+        "DATABASE_URL": "postgresql+asyncpg://u:p@localhost/db",
+        "REDIS_URL": "redis://localhost:6379/0",
+    }
+    with (
+        patch.dict("os.environ", env, clear=True),
+        patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=mock_engine) as mock_create,
+        patch("sqlalchemy.ext.asyncio.async_sessionmaker", return_value=mock_factory),
+        patch("siphon.concurrency.acquire_connection_slot", return_value=(True, 1)) as mock_acq,
+        patch("siphon.concurrency.release_connection_slot") as mock_rel,
+        patch("siphon.worker.run_job", new_callable=AsyncMock) as mock_run_job,
+    ):
+        await _run_job_async(MagicMock(), MagicMock(), job, max_concurrent=2)
+        mock_run_job.assert_awaited_once()
+
+    assert mock_create.call_args.kwargs["poolclass"] is NullPool
+    mock_acq.assert_called_once()
+    mock_rel.assert_called_once_with(conn_id, "job-redis")
+    mock_engine.dispose.assert_awaited_once()
+
+
+async def test_run_job_async_raises_on_redis_concurrency_limit():
+    """_run_job_async raises ConcurrencyLimitReached when Redis semaphore denies the slot."""
+    import uuid
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    import pytest
+
+    from siphon.models import Job
+    from siphon.tasks import ConcurrencyLimitReached, _run_job_async
+
+    conn_id = str(uuid.uuid4())
+    job = Job(job_id="job-busy", source_connection_id=conn_id)
+
+    mock_session = AsyncMock()
+    mock_session.scalar = AsyncMock(return_value=2)
+    mock_ctx = AsyncMock()
+    mock_ctx.__aenter__.return_value = mock_session
+    mock_factory = MagicMock(return_value=mock_ctx)
+    mock_engine = AsyncMock()
+
+    env = {
+        "DATABASE_URL": "postgresql+asyncpg://u:p@localhost/db",
+        "REDIS_URL": "redis://localhost:6379/0",
+    }
+    with (
+        patch.dict("os.environ", env, clear=True),
+        patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=mock_engine),
+        patch("sqlalchemy.ext.asyncio.async_sessionmaker", return_value=mock_factory),
+        patch("siphon.concurrency.acquire_connection_slot", return_value=(False, 2)),
+        patch("siphon.concurrency.release_connection_slot") as mock_rel,
+        patch("siphon.worker.run_job", new_callable=AsyncMock) as mock_run_job,
+    ):
+        with pytest.raises(ConcurrencyLimitReached, match="2/2"):
+            await _run_job_async(MagicMock(), MagicMock(), job, max_concurrent=2)
+        mock_run_job.assert_not_awaited()
+
+    mock_rel.assert_not_called()
+    mock_engine.dispose.assert_awaited_once()
