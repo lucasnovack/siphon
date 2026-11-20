@@ -64,43 +64,48 @@ export function PipelinesPage() {
           action={{ label: 'Create Pipeline', onClick: () => navigate('/pipelines/new') }}
         />
       ) : (
-        <div className="grid gap-3">
-          {pipelines.map((pipeline) => (
-            <Card
-              key={pipeline.id}
-              className="cursor-pointer hover:shadow-md transition-shadow"
-              onClick={() => navigate(`/pipelines/${pipeline.id}`)}
-            >
-              <CardContent className="flex items-center justify-between p-4">
-                <div className="flex items-center gap-3">
-                  <div className="rounded-md bg-primary/10 p-2">
-                    <GitBranch className="h-4 w-4 text-primary" />
+        <Card className="overflow-hidden">
+          <CardContent className="p-0 divide-y divide-border/60">
+            {pipelines.map((pipeline) => (
+              <div
+                key={pipeline.id}
+                className="flex items-center justify-between px-5 py-3.5 cursor-pointer hover:bg-foreground/[0.025] transition-colors"
+                onClick={() => navigate(`/pipelines/${pipeline.id}`)}
+              >
+                <div className="flex items-center gap-3.5 min-w-0">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-secondary border border-border/60 shrink-0">
+                    <GitBranch className="h-3.5 w-3.5 text-foreground/80" />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="font-medium">{pipeline.name}</span>
+                      <span className="text-xs font-medium truncate">{pipeline.name}</span>
                       {!pipeline.is_active && <Badge variant="secondary">Inactive</Badge>}
                     </div>
-                    <div className="text-xs text-muted-foreground mt-0.5">
+                    <div className="text-[11px] text-muted-foreground mt-0.5 tabular-nums">
                       {pipeline.extraction_mode}
-                      {pipeline.schedule && <> · <span className="font-mono">{pipeline.schedule.cron_expr}</span></>}
+                      {pipeline.schedule && <> · {pipeline.schedule.cron_expr}</>}
                     </div>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 shrink-0">
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={(e) => { e.stopPropagation(); triggerMutation.mutate(pipeline.id) }}
                     disabled={triggerMutation.isPending}
                   >
-                    <Play className="h-3 w-3 mr-1" />
+                    <Play className="h-3 w-3 mr-1.5" />
                     Run
                   </Button>
                   <ConfirmDialog
                     trigger={
-                      <Button variant="ghost" size="icon" onClick={(e) => e.stopPropagation()}>
-                        <Trash2 className="h-4 w-4 text-destructive" />
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={(e) => e.stopPropagation()}
+                        className="text-muted-foreground hover:text-destructive"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     }
                     title="Delete pipeline?"
@@ -110,10 +115,10 @@ export function PipelinesPage() {
                     onConfirm={() => deleteMutation.mutate(pipeline.id)}
                   />
                 </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
       )}
     </div>
   )

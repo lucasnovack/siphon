@@ -55,21 +55,21 @@ export function ConnectionsPage() {
           action={{ label: 'Add Connection', onClick: () => navigate('/connections/new') }}
         />
       ) : (
-        <div className="grid gap-3">
-          {connections.map((conn) => (
-            <Card
-              key={conn.id}
-              className="cursor-pointer hover:shadow-md transition-shadow"
-              onClick={() => navigate(`/connections/${conn.id}`)}
-            >
-              <CardContent className="flex items-center justify-between p-4">
-                <div className="flex items-center gap-3">
-                  <div className="rounded-md bg-primary/10 p-2">
-                    <Database className="h-4 w-4 text-primary" />
+        <Card className="overflow-hidden">
+          <CardContent className="p-0 divide-y divide-border/60">
+            {connections.map((conn) => (
+              <div
+                key={conn.id}
+                className="flex items-center justify-between px-5 py-3.5 cursor-pointer hover:bg-foreground/[0.025] transition-colors"
+                onClick={() => navigate(`/connections/${conn.id}`)}
+              >
+                <div className="flex items-center gap-3.5 min-w-0">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-secondary border border-border/60 shrink-0">
+                    <Database className="h-3.5 w-3.5 text-foreground/80" />
                   </div>
-                  <div>
-                    <div className="font-medium">{conn.name}</div>
-                    <div className="text-xs text-muted-foreground">{conn.id.slice(0, 8)}…</div>
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium truncate">{conn.name}</div>
+                    <div className="text-[11px] text-muted-foreground tabular-nums">{conn.id.slice(0, 8)}…</div>
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
@@ -80,8 +80,9 @@ export function ConnectionsPage() {
                         variant="ghost"
                         size="icon"
                         onClick={(e) => e.stopPropagation()}
+                        className="text-muted-foreground hover:text-destructive"
                       >
-                        <Trash2 className="h-4 w-4 text-destructive" />
+                        <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     }
                     title="Delete connection?"
@@ -91,10 +92,10 @@ export function ConnectionsPage() {
                     onConfirm={() => deleteMutation.mutate(conn.id)}
                   />
                 </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
       )}
     </div>
   )

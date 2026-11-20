@@ -54,26 +54,37 @@ export function RunsPage() {
       ) : runs.length === 0 ? (
         <EmptyState icon={Activity} title="No runs yet" description="Runs appear here when pipelines are triggered." />
       ) : (
-        <Card>
+        <Card className="overflow-hidden">
           <CardContent className="p-0">
-            <div className="divide-y">
+            <div className="divide-y divide-border/60">
               {runs.map((run) => (
-                <div key={run.id} className="flex items-center justify-between px-4 py-3 hover:bg-muted/30">
-                  <div>
-                    <Link to={`/runs/${run.id}`} className="text-sm font-mono font-medium hover:underline text-primary">
-                      {run.id.slice(0, 8)}…
-                    </Link>
-                    {run.pipeline_id && (
-                      <Link to={`/pipelines/${run.pipeline_id}`} className="ml-2 text-xs text-muted-foreground hover:underline">
-                        pipeline
+                <div
+                  key={run.id}
+                  className="flex items-center justify-between px-5 py-3.5 hover:bg-foreground/[0.025] transition-colors"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <Link
+                        to={`/runs/${run.id}`}
+                        className="text-xs font-medium text-foreground hover:underline underline-offset-4"
+                      >
+                        {run.id.slice(0, 8)}…
                       </Link>
-                    )}
-                    <div className="text-xs text-muted-foreground mt-0.5">
+                      {run.pipeline_id && (
+                        <Link
+                          to={`/pipelines/${run.pipeline_id}`}
+                          className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          · pipeline
+                        </Link>
+                      )}
+                    </div>
+                    <div className="text-[11px] text-muted-foreground mt-0.5 tabular-nums">
                       {run.triggered_by} · {run.created_at ? format(new Date(run.created_at), 'MMM d, HH:mm:ss') : '—'}
                       {run.rows_read != null && <> · {run.rows_read.toLocaleString()} rows</>}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 shrink-0">
                     {run.schema_changed && <SchemaDriftBadge />}
                     <StatusBadge status={run.status} />
                   </div>
