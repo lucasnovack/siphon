@@ -1,6 +1,7 @@
 services:
   siphon:
     build: .
+    image: siphon:latest
     ports:
       - "8000:8000"
     environment:
@@ -40,6 +41,7 @@ services:
 
   siphon-worker:
     build: .
+    image: siphon:latest
     command: >
       celery -A siphon.celery_app worker
       --loglevel=info
@@ -68,6 +70,7 @@ services:
 
   siphon-preview-worker:
     build: .
+    image: siphon:latest
     command: >
       celery -A siphon.celery_app worker
       --loglevel=info
