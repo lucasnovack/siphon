@@ -45,8 +45,8 @@ export function DashboardPage() {
   const qc = useQueryClient()
 
   const { data: runs } = useQuery({
-    queryKey: queryKeys.runs.list({ limit: 12 }),
-    queryFn: () => runsApi.list({ limit: 12 }).then((r) => r.data),
+    queryKey: queryKeys.runs.list({ limit: 10 }),
+    queryFn: () => runsApi.list({ limit: 10 }).then((r) => r.data),
     refetchInterval: 8_000,
     refetchIntervalInBackground: false,
   })
@@ -65,7 +65,7 @@ export function DashboardPage() {
     mutationFn: (id: string) => pipelinesApi.trigger(id),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: queryKeys.runs.all })
-      toast({ title: 'Pipeline triggered', description: `Job ${res.data.job_id.slice(0, 8)}… started` })
+      toast({ title: 'Pipeline triggered', description: `Job #${res.data.job_id.slice(0, 8)} started` })
       navigate(`/runs/${res.data.job_id}`)
     },
     onError: () => toast({ title: 'Failed to trigger pipeline', variant: 'destructive' }),
@@ -75,7 +75,6 @@ export function DashboardPage() {
   const pipelineList = pipelines ?? []
   const connectionList = connections ?? []
 
-  // Maps for fast pipeline and connection lookup
   const pipelineMap = new Map<string, Pipeline>(pipelineList.map((p) => [p.id, p]))
   const connectionMap = new Map<string, Connection>(connectionList.map((c) => [c.id, c]))
 
@@ -85,21 +84,19 @@ export function DashboardPage() {
   const sourceConnections = connectionList.filter((c) => getConnectorMeta(c.type).role === 'source')
   const destConnections = connectionList.filter((c) => getConnectorMeta(c.type).role === 'destination')
 
-  // Run statistics
   const totalRecentRuns = recentRuns.length
   const successRuns = recentRuns.filter((r) => r.status === 'success').length
   const failedRuns = recentRuns.filter((r) => r.status === 'failed').length
   const runningRuns = recentRuns.filter((r) => r.status === 'running').length
 
   const successRate = totalRecentRuns > 0 ? Math.round((successRuns / totalRecentRuns) * 100) : null
-
   const totalRowsIngested = recentRuns.reduce((acc, r) => acc + (r.rows_written ?? r.rows_read ?? 0), 0)
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Dashboard"
-        description="High-throughput Bronze ingestion telemetry & active pipelines"
+        description="Telemetry and pipeline execution overview."
         action={
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={() => navigate('/connections/new')}>
@@ -114,12 +111,12 @@ export function DashboardPage() {
         }
       />
 
-      {/* KPI Metric Cards */}
+      {/* Top KPI Metrics Bar */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Active Pipelines */}
-        <Card className="hover:border-border transition-colors">
+        {/* Pipelines */}
+        <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground flex items-center justify-between">
+            <CardTitle className="text-xs font-medium uppercase tracking-wider text-muted-foreground flex items-center justify-between">
               <span>Pipelines</span>
               <GitBranch className="h-3.5 w-3.5 text-muted-foreground/70" />
             </CardTitle>
@@ -133,7 +130,7 @@ export function DashboardPage() {
             </div>
             <Link
               to="/pipelines"
-              className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground mt-2 transition-colors"
+              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground mt-2 transition-colors"
             >
               Manage pipelines
               <ArrowRight className="h-3 w-3" />
@@ -142,10 +139,10 @@ export function DashboardPage() {
         </Card>
 
         {/* Rows Ingested */}
-        <Card className="hover:border-border transition-colors">
+        <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground flex items-center justify-between">
-              <span>Ingested Rows (Recent)</span>
+            <CardTitle className="text-xs font-medium uppercase tracking-wider text-muted-foreground flex items-center justify-between">
+              <span>Rows Ingested (Recent)</span>
               <Database className="h-3.5 w-3.5 text-muted-foreground/70" />
             </CardTitle>
           </CardHeader>
@@ -153,16 +150,16 @@ export function DashboardPage() {
             <div className="text-2xl font-semibold tracking-tight font-mono tabular-nums text-foreground">
               {totalRowsIngested.toLocaleString()}
             </div>
-            <p className="text-[11px] text-muted-foreground mt-2">
-              Parquet written to Bronze storage
+            <p className="text-xs text-muted-foreground mt-2">
+              Bronze Parquet records
             </p>
           </CardContent>
         </Card>
 
         {/* Ingestion Success Rate */}
-        <Card className="hover:border-border transition-colors">
+        <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground flex items-center justify-between">
+            <CardTitle className="text-xs font-medium uppercase tracking-wider text-muted-foreground flex items-center justify-between">
               <span>Success Rate</span>
               <Activity className="h-3.5 w-3.5 text-muted-foreground/70" />
             </CardTitle>
@@ -185,21 +182,21 @@ export function DashboardPage() {
               </span>
               {runningRuns > 0 && (
                 <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-500 border-blue-500/20 font-mono">
-                  {runningRuns} active
+                  {runningRuns} running
                 </Badge>
               )}
             </div>
-            <p className="text-[11px] text-muted-foreground mt-2 tabular-nums font-mono">
+            <p className="text-xs text-muted-foreground mt-2 tabular-nums font-mono">
               {successRuns} succeeded · {failedRuns} failed
             </p>
           </CardContent>
         </Card>
 
-        {/* Topology */}
-        <Card className="hover:border-border transition-colors">
+        {/* Storage Topology */}
+        <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground flex items-center justify-between">
-              <span>Storage Topology</span>
+            <CardTitle className="text-xs font-medium uppercase tracking-wider text-muted-foreground flex items-center justify-between">
+              <span>Connected Storage</span>
               <Layers className="h-3.5 w-3.5 text-muted-foreground/70" />
             </CardTitle>
           </CardHeader>
@@ -216,7 +213,7 @@ export function DashboardPage() {
             </div>
             <Link
               to="/connections"
-              className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground mt-2 transition-colors"
+              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground mt-2 transition-colors"
             >
               View connections
               <ArrowRight className="h-3 w-3" />
@@ -225,241 +222,185 @@ export function DashboardPage() {
         </Card>
       </div>
 
-      {/* Main Content Grid: Live Ingestion Stream (Left) + Pipelines & Topology (Right) */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column: Recent Runs */}
-        <div className="lg:col-span-2 space-y-4">
-          <Card className="overflow-hidden">
-            <CardHeader className="flex flex-row items-center justify-between border-b border-border/60 py-3.5 px-5">
-              <div className="flex items-center gap-2.5">
-                <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  <Activity className="h-3.5 w-3.5" /> Recent Ingestion Runs
-                </CardTitle>
-                <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  Live
-                </div>
-              </div>
-              <Link
-                to="/runs"
-                className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-              >
-                View history
-                <ArrowUpRight className="h-3.5 w-3.5" />
-              </Link>
-            </CardHeader>
-            <CardContent className="p-0">
-              {recentRuns.length === 0 ? (
-                <div className="py-12 px-4 text-center">
-                  <Activity className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
-                  <p className="text-xs font-medium text-foreground">No ingestion runs yet</p>
-                  <p className="text-[11px] text-muted-foreground mt-1">
-                    Trigger a pipeline or wait for a scheduled job to start.
-                  </p>
-                </div>
-              ) : (
-                <div className="divide-y divide-border/60">
-                  {recentRuns.map((run) => {
-                    const pipeline = run.pipeline_id ? pipelineMap.get(run.pipeline_id) : undefined
-                    const sourceConn = pipeline ? connectionMap.get(pipeline.source_connection_id) : undefined
-                    const destConn = pipeline?.dest_connection_id ? connectionMap.get(pipeline.dest_connection_id) : undefined
+      {/* Live Ingestion Feed (Recent Runs) */}
+      <Card className="overflow-hidden">
+        <CardHeader className="flex flex-row items-center justify-between border-b border-border/60 py-3.5 px-5">
+          <div className="flex items-center gap-2.5">
+            <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              <Activity className="h-3.5 w-3.5" /> Recent Ingestion Runs
+            </CardTitle>
+            <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              Live
+            </div>
+          </div>
+          <Link
+            to="/runs"
+            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            View all history
+            <ArrowUpRight className="h-3.5 w-3.5" />
+          </Link>
+        </CardHeader>
+        <CardContent className="p-0">
+          {recentRuns.length === 0 ? (
+            <div className="py-12 px-4 text-center">
+              <Activity className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
+              <p className="text-sm font-medium text-foreground">No ingestion runs yet</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Trigger a pipeline to start extracting data into your Bronze storage.
+              </p>
+            </div>
+          ) : (
+            <div className="divide-y divide-border/60">
+              {recentRuns.map((run) => {
+                const pipeline = run.pipeline_id ? pipelineMap.get(run.pipeline_id) : undefined
+                const sourceConn = pipeline ? connectionMap.get(pipeline.source_connection_id) : undefined
+                const destConn = pipeline?.dest_connection_id ? connectionMap.get(pipeline.dest_connection_id) : undefined
 
-                    return (
-                      <div
-                        key={run.id}
-                        className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-5 py-3.5 hover:bg-foreground/[0.025] transition-colors"
-                      >
-                        <div className="min-w-0 flex items-start gap-3">
-                          {/* Engine Pair Flow Icons */}
-                          {sourceConn && (
-                            <div className="flex items-center gap-1.5 mt-0.5 shrink-0">
-                              <EngineLogo type={sourceConn.type} name={sourceConn.name} size="sm" />
-                              {destConn && (
-                                <>
-                                  <ArrowRight className="h-3 w-3 text-muted-foreground/50 shrink-0" />
-                                  <EngineLogo type={destConn.type} name={destConn.name} size="sm" />
-                                </>
-                              )}
-                            </div>
+                return (
+                  <div
+                    key={run.id}
+                    className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-5 py-3.5 hover:bg-foreground/[0.02] transition-colors"
+                  >
+                    <div className="min-w-0 flex items-center gap-3.5">
+                      {/* Engine Pair Flow Icons */}
+                      {sourceConn && (
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <EngineLogo type={sourceConn.type} name={sourceConn.name} size="sm" />
+                          {destConn && (
+                            <>
+                              <ArrowRight className="h-3 w-3 text-muted-foreground/40 shrink-0" />
+                              <EngineLogo type={destConn.type} name={destConn.name} size="sm" />
+                            </>
+                          )}
+                        </div>
+                      )}
+
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {pipeline ? (
+                            <Link
+                              to={`/pipelines/${pipeline.id}`}
+                              className="text-xs font-semibold text-foreground hover:underline underline-offset-4 truncate max-w-[280px]"
+                            >
+                              {pipeline.name}
+                            </Link>
+                          ) : (
+                            <span className="text-xs font-semibold text-foreground">Ad-hoc Run</span>
                           )}
 
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              {pipeline ? (
-                                <Link
-                                  to={`/pipelines/${pipeline.id}`}
-                                  className="text-xs font-semibold text-foreground hover:underline underline-offset-4 truncate max-w-[220px]"
-                                >
-                                  {pipeline.name}
-                                </Link>
-                              ) : (
-                                <span className="text-xs font-semibold text-foreground">Ad-hoc Job</span>
-                              )}
-
-                              <Link
-                                to={`/runs/${run.id}`}
-                                className="font-mono text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-                              >
-                                #{run.id.slice(0, 8)}
-                              </Link>
-
-                              <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-                                {run.triggered_by}
-                              </Badge>
-                            </div>
-
-                            <div className="flex items-center gap-2 text-[11px] text-muted-foreground mt-1 tabular-nums font-mono flex-wrap">
-                              <span>{run.created_at ? format(new Date(run.created_at), 'MMM d, HH:mm:ss') : '—'}</span>
-                              <span>·</span>
-                              <span>{formatDuration(run.started_at, run.finished_at)}</span>
-                              {(run.rows_written != null || run.rows_read != null) && (
-                                <>
-                                  <span>·</span>
-                                  <span className="text-foreground/80 font-medium">
-                                    {(run.rows_written ?? run.rows_read ?? 0).toLocaleString()} rows
-                                  </span>
-                                </>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-2.5 shrink-0 self-end sm:self-center">
-                          {run.schema_changed && <SchemaDriftBadge />}
-                          <StatusBadge status={run.status} />
                           <Link
                             to={`/runs/${run.id}`}
-                            className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
-                            title="Inspect Run"
+                            className="font-mono text-xs text-muted-foreground hover:text-foreground transition-colors"
                           >
-                            <ArrowRight className="h-3.5 w-3.5" />
+                            #{run.id.slice(0, 8)}
                           </Link>
+
+                          <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                            {run.triggered_by}
+                          </Badge>
+                        </div>
+
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1 tabular-nums font-mono flex-wrap">
+                          <span>{run.created_at ? format(new Date(run.created_at), 'MMM d, HH:mm:ss') : '—'}</span>
+                          <span>·</span>
+                          <span>{formatDuration(run.started_at, run.finished_at)}</span>
+                          {(run.rows_written != null || run.rows_read != null) && (
+                            <>
+                              <span>·</span>
+                              <span className="text-foreground/80 font-medium">
+                                {(run.rows_written ?? run.rows_read ?? 0).toLocaleString()} rows
+                              </span>
+                            </>
+                          )}
                         </div>
                       </div>
-                    )
-                  })}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+                    </div>
 
-        {/* Right Column: Active Pipelines & Engine Overview */}
-        <div className="space-y-6">
-          {/* Active Pipelines Widget */}
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between border-b border-border/60 py-3.5 px-5">
-              <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                <GitBranch className="h-3.5 w-3.5" /> Pipelines
-              </CardTitle>
-              <Link
-                to="/pipelines"
-                className="text-xs text-muted-foreground hover:text-foreground transition-colors inline-flex items-center gap-1"
-              >
-                All ({pipelineList.length})
-                <ArrowUpRight className="h-3.5 w-3.5" />
-              </Link>
-            </CardHeader>
-            <CardContent className="p-0 divide-y divide-border/60">
-              {pipelineList.length === 0 ? (
-                <div className="py-8 px-4 text-center">
-                  <p className="text-xs text-muted-foreground">No pipelines configured yet.</p>
+                    <div className="flex items-center gap-2.5 shrink-0 self-end sm:self-center">
+                      {run.schema_changed && <SchemaDriftBadge />}
+                      <StatusBadge status={run.status} />
+                      <Link
+                        to={`/runs/${run.id}`}
+                        className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
+                        title="View Run Details"
+                      >
+                        <ArrowRight className="h-3.5 w-3.5" />
+                      </Link>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Quick Pipelines Bar */}
+      {pipelineList.length > 0 && (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between border-b border-border/60 py-3 px-5">
+            <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              <GitBranch className="h-3.5 w-3.5" /> Quick Trigger Pipelines
+            </CardTitle>
+            <Link
+              to="/pipelines"
+              className="text-xs text-muted-foreground hover:text-foreground transition-colors inline-flex items-center gap-1"
+            >
+              All pipelines ({pipelineList.length})
+              <ArrowUpRight className="h-3.5 w-3.5" />
+            </Link>
+          </CardHeader>
+          <CardContent className="p-0 divide-y divide-border/60">
+            {pipelineList.slice(0, 4).map((pipeline) => {
+              const source = connectionMap.get(pipeline.source_connection_id)
+              const dest = pipeline.dest_connection_id ? connectionMap.get(pipeline.dest_connection_id) : undefined
+
+              return (
+                <div
+                  key={pipeline.id}
+                  className="flex items-center justify-between gap-3 px-5 py-3 hover:bg-foreground/[0.02] transition-colors"
+                >
+                  <div className="min-w-0 flex items-center gap-3">
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {source && <EngineLogo type={source.type} name={source.name} size="sm" />}
+                      {dest && (
+                        <>
+                          <ArrowRight className="h-2.5 w-2.5 text-muted-foreground/40 shrink-0" />
+                          <EngineLogo type={dest.type} name={dest.name} size="sm" />
+                        </>
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <Link
+                        to={`/pipelines/${pipeline.id}`}
+                        className="text-xs font-semibold text-foreground hover:underline block truncate max-w-[280px]"
+                      >
+                        {pipeline.name}
+                      </Link>
+                      <div className="text-[11px] text-muted-foreground font-mono truncate mt-0.5">
+                        {pipeline.extraction_mode} · {pipeline.schedule ? pipeline.schedule.cron_expr : 'Manual trigger'}
+                      </div>
+                    </div>
+                  </div>
+
                   <Button
                     size="sm"
                     variant="outline"
-                    className="mt-3 text-xs"
-                    onClick={() => navigate('/pipelines/new')}
+                    className="h-7 text-xs shrink-0 gap-1.5"
+                    onClick={() => triggerMutation.mutate(pipeline.id)}
+                    disabled={triggerMutation.isPending}
                   >
-                    <Plus className="h-3.5 w-3.5 mr-1" />
-                    Create Pipeline
+                    <Play className="h-3 w-3" />
+                    <span>Run</span>
                   </Button>
                 </div>
-              ) : (
-                pipelineList.slice(0, 5).map((pipeline) => {
-                  const source = connectionMap.get(pipeline.source_connection_id)
-                  const dest = pipeline.dest_connection_id ? connectionMap.get(pipeline.dest_connection_id) : undefined
-
-                  return (
-                    <div
-                      key={pipeline.id}
-                      className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-foreground/[0.025] transition-colors"
-                    >
-                      <div className="min-w-0 flex items-center gap-2">
-                        {source && <EngineLogo type={source.type} name={source.name} size="sm" />}
-                        {dest && (
-                          <>
-                            <ArrowRight className="h-2.5 w-2.5 text-muted-foreground/40 shrink-0" />
-                            <EngineLogo type={dest.type} name={dest.name} size="sm" />
-                          </>
-                        )}
-                        <div className="min-w-0">
-                          <Link
-                            to={`/pipelines/${pipeline.id}`}
-                            className="text-xs font-medium text-foreground hover:underline block truncate max-w-[150px]"
-                          >
-                            {pipeline.name}
-                          </Link>
-                          <div className="text-[10.5px] text-muted-foreground font-mono truncate">
-                            {pipeline.schedule ? pipeline.schedule.cron_expr : 'Manual trigger'}
-                          </div>
-                        </div>
-                      </div>
-
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground shrink-0"
-                        onClick={() => triggerMutation.mutate(pipeline.id)}
-                        disabled={triggerMutation.isPending}
-                        title="Run now"
-                      >
-                        <Play className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  )
-                })
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Siphon Architecture Status Pill */}
-          <Card className="bg-secondary/20">
-            <CardContent className="p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Ingestion Engine
-                </span>
-                <span className="inline-flex items-center gap-1.5 text-[10.5px] font-medium text-emerald-500">
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                  Operational
-                </span>
-              </div>
-
-              <div className="space-y-1.5 text-xs text-muted-foreground">
-                <div className="flex items-center justify-between py-0.5">
-                  <span>Engine Format</span>
-                  <span className="font-mono text-foreground text-[11px]">PyArrow / Parquet</span>
-                </div>
-                <div className="flex items-center justify-between py-0.5">
-                  <span>Concurrency</span>
-                  <span className="font-mono text-foreground text-[11px]">Celery & Redis Pool</span>
-                </div>
-                <div className="flex items-center justify-between py-0.5">
-                  <span>Credentials</span>
-                  <span className="font-mono text-foreground text-[11px]">Fernet AES-128-CBC</span>
-                </div>
-              </div>
-
-              <div className="pt-2 border-t border-border/60 flex items-center justify-between text-[11px]">
-                <span className="text-muted-foreground">Destination Layer</span>
-                <Badge variant="outline" className="text-[10px] uppercase font-mono tracking-wider">
-                  Bronze Storage
-                </Badge>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
+              )
+            })}
+          </CardContent>
+        </Card>
+      )}
     </div>
   )
 }

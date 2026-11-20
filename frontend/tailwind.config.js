@@ -47,7 +47,7 @@ export default {
         },
       },
       fontFamily: {
-        sans: ['"JetBrains Mono"', '-apple-system', 'BlinkMacSystemFont', 'ui-monospace', 'SFMono-Regular', 'monospace'],
+        sans: ['"Open Sans"', '-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', 'sans-serif'],
         mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'monospace'],
       },
       boxShadow: {
