@@ -392,17 +392,17 @@ async def _async_trigger_pipeline(pipeline_id_str: str) -> None:
             dialect = src_config.get("connection", "").split("://")[0]
             query = inject_watermark(query, p.incremental_key, p.last_watermark, dialect)
 
+        from siphon.models import build_destination_payload
+
         dest_path = p.destination_path.replace("{date}", str(date.today()))
         source_payload = {"type": "sql", "connection": src_config["connection"], "query": query}
-        dest_payload = {
-            "type": "s3_parquet",
-            "path": dest_path,
-            "endpoint": dest_config["endpoint"],
-            "access_key": dest_config["access_key"],
-            "secret_key": dest_config["secret_key"],
-            "extraction_mode": p.extraction_mode,
-            "partition_by": p.partition_by or "none",
-        }
+        dest_payload = build_destination_payload(
+            dest_conn.conn_type,
+            dest_config,
+            dest_path,
+            extraction_mode=p.extraction_mode,
+            partition_by=p.partition_by or "none",
+        )
 
         try:
             req = ExtractRequest(**{"source": source_payload, "destination": dest_payload})

@@ -21,7 +21,7 @@ from siphon.plugins.sources.sql import _validate_host
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/api/v1/connections", tags=["connections"])
 
-ConnType = Literal["sql", "sftp", "s3_parquet"]
+ConnType = Literal["sql", "sftp", "s3_parquet", "gcs_parquet"]
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
 
@@ -231,6 +231,31 @@ def _test_connection(conn_type: str, config: dict) -> None:
         )
         fs.get_file_info(pafs.FileSelector("/", recursive=False))
 
+    elif conn_type == "gcs_parquet":
+        import pyarrow.fs as pafs
+
+        from siphon.plugins.destinations.gcs_auth import build_gcs_filesystem
+
+        endpoint_override = config.get("endpoint_override") or None
+        if endpoint_override:
+            _validate_host(f"dummy://{endpoint_override}")
+
+        fs = build_gcs_filesystem(
+            auth_mode=config.get("auth_mode") or "adc",
+            credentials_json=config.get("credentials_json") or None,
+            project_id=config.get("project_id") or None,
+            target_service_account=config.get("target_service_account") or None,
+            endpoint_override=endpoint_override,
+            scheme=config.get("scheme") or None,
+        )
+        bucket = (config.get("bucket") or "").removeprefix("gs://").strip("/")
+        if bucket:
+            info = fs.get_file_info(bucket)
+            if info.type == pafs.FileType.NotFound:
+                raise ValueError(f"GCS bucket not found: {bucket!r}")
+        else:
+            fs.get_file_info(pafs.FileSelector("/", recursive=False))
+
     else:
         raise ValueError(f"Unknown connection type: {conn_type!r}")
 
@@ -292,6 +317,55 @@ _CONNECTION_TYPES = [
             },
             {"name": "access_key", "type": "string", "label": "Access Key"},
             {"name": "secret_key", "type": "string", "label": "Secret Key", "secret": True},
+        ],
+    },
+    {
+        "type": "gcs_parquet",
+        "label": "Google Cloud Storage (GCS)",
+        "fields": [
+            {
+                "name": "auth_mode",
+                "type": "select",
+                "label": "Authentication Mode",
+                "default": "adc",
+                "required": True,
+                "options": [
+                    {"value": "adc", "label": "Automatic (GCP VM / GKE Workload Identity / ADC)"},
+                    {"value": "service_account", "label": "Service Account JSON"},
+                    {"value": "anonymous", "label": "Anonymous (Public / Local Emulator)"},
+                ],
+            },
+            {
+                "name": "credentials_json",
+                "type": "textarea",
+                "label": "Service Account JSON",
+                "secret": True,
+                "placeholder": '{"type": "service_account", "client_email": "...", "private_key": "..."}',
+            },
+            {
+                "name": "project_id",
+                "type": "string",
+                "label": "GCP Project ID (optional)",
+                "placeholder": "my-gcp-project",
+            },
+            {
+                "name": "bucket",
+                "type": "string",
+                "label": "Bucket for Connectivity Test (optional)",
+                "placeholder": "bronze",
+            },
+            {
+                "name": "target_service_account",
+                "type": "string",
+                "label": "Impersonate Service Account (optional)",
+                "placeholder": "writer@my-gcp-project.iam.gserviceaccount.com",
+            },
+            {
+                "name": "endpoint_override",
+                "type": "string",
+                "label": "Endpoint Override (optional, e.g. fake-gcs-server)",
+                "placeholder": "localhost:4443",
+            },
         ],
     },
 ]

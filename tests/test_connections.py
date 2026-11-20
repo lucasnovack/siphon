@@ -242,3 +242,30 @@ def test_create_connection_requires_admin(monkeypatch):
         "config": {"connection": "mysql://u:p@host/db"},
     })
     assert resp.status_code == 403
+
+
+def test_connection_types_includes_gcs_parquet(client):
+    tc, _ = client
+    resp = tc.get("/api/v1/connections/types/list")
+    assert resp.status_code == 200
+    types_by_name = {t["type"]: t for t in resp.json()}
+    assert "gcs_parquet" in types_by_name
+    field_names = {f["name"] for f in types_by_name["gcs_parquet"]["fields"]}
+    assert {"auth_mode", "credentials_json", "project_id", "target_service_account"} <= field_names
+
+
+def test_gcs_connection_test_checks_bucket_via_adc():
+    import pyarrow.fs as pafs
+
+    from siphon.connections.router import _test_connection
+
+    mock_fs = MagicMock()
+    mock_info = MagicMock()
+    mock_info.type = pafs.FileType.Directory
+    mock_fs.get_file_info.return_value = mock_info
+
+    with patch("siphon.plugins.destinations.gcs_auth.build_gcs_filesystem", return_value=mock_fs) as mock_build:
+        _test_connection("gcs_parquet", {"auth_mode": "adc", "bucket": "gs://bronze/"})
+
+    mock_build.assert_called_once()
+    mock_fs.get_file_info.assert_called_once_with("bronze")

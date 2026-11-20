@@ -95,6 +95,67 @@ class S3ParquetDestinationConfig(BaseModel):
         )
 
 
+class GCSParquetDestinationConfig(BaseModel):
+    type: Literal["gcs_parquet"]
+    path: str
+    auth_mode: Literal["adc", "service_account", "anonymous"] = "adc"
+    credentials_json: str | dict | None = None
+    project_id: str | None = None
+    target_service_account: str | None = None
+    endpoint_override: str | None = None
+    scheme: str | None = None
+    compression: str = "snappy"
+    extraction_mode: Literal["full_refresh", "incremental"] = "full_refresh"
+    partition_by: Literal["none", "ingest_date"] = "none"
+
+    def __repr__(self) -> str:
+        return (
+            f"GCSParquetDestinationConfig(path={self.path!r}, "
+            f"auth_mode={self.auth_mode!r}, project_id={self.project_id!r}, "
+            f"credentials_json={'***' if self.credentials_json else None})"
+        )
+
+
+def build_destination_payload(
+    dest_type: str,
+    dest_config: dict,
+    dest_path: str,
+    extraction_mode: str = "full_refresh",
+    partition_by: str = "none",
+) -> dict:
+    """Build a validated destination plugin payload from a Connection's decrypted config."""
+    if dest_type == "s3_parquet":
+        return {
+            "type": "s3_parquet",
+            "path": dest_path,
+            "endpoint": dest_config["endpoint"],
+            "access_key": dest_config["access_key"],
+            "secret_key": dest_config["secret_key"],
+            "extraction_mode": extraction_mode,
+            "partition_by": partition_by or "none",
+        }
+    if dest_type == "gcs_parquet":
+        payload = {
+            "type": "gcs_parquet",
+            "path": dest_path,
+            "auth_mode": dest_config.get("auth_mode") or "adc",
+            "extraction_mode": extraction_mode,
+            "partition_by": partition_by or "none",
+        }
+        for opt_key in (
+            "credentials_json",
+            "project_id",
+            "target_service_account",
+            "endpoint_override",
+            "scheme",
+        ):
+            val = dest_config.get(opt_key)
+            if val not in (None, ""):
+                payload[opt_key] = val
+        return payload
+    raise ValueError(f"Unsupported destination connection type: {dest_type!r}")
+
+
 # ── Request / response models ─────────────────────────────────────────────────
 
 SourceConfig = Annotated[
@@ -102,7 +163,10 @@ SourceConfig = Annotated[
     Field(discriminator="type"),
 ]
 
-DestinationConfig = S3ParquetDestinationConfig
+DestinationConfig = Annotated[
+    S3ParquetDestinationConfig | GCSParquetDestinationConfig,
+    Field(discriminator="type"),
+]
 
 
 class ExtractRequest(BaseModel):

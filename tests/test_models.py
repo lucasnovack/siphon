@@ -122,6 +122,32 @@ class TestS3ParquetDestinationConfig:
         assert "wJalrXUtnFEMI" not in r
 
 
+class TestGCSParquetDestinationConfig:
+    def test_defaults_to_adc_and_masks_sa_json(self):
+        from siphon.models import GCSParquetDestinationConfig, build_destination_payload
+
+        cfg = GCSParquetDestinationConfig(
+            type="gcs_parquet",
+            path="gs://bronze/orders",
+            auth_mode="service_account",
+            credentials_json='{"private_key": "SUPER_SECRET_KEY"}',
+        )
+        assert cfg.compression == "snappy"
+        assert "SUPER_SECRET_KEY" not in repr(cfg)
+
+        adc_payload = build_destination_payload(
+            "gcs_parquet",
+            {"project_id": "my-proj"},
+            "gs://bronze/orders",
+            extraction_mode="incremental",
+            partition_by="ingest_date",
+        )
+        assert adc_payload["type"] == "gcs_parquet"
+        assert adc_payload["auth_mode"] == "adc"
+        assert adc_payload["project_id"] == "my-proj"
+        assert "credentials_json" not in adc_payload
+
+
 class TestExtractRequest:
     def test_discriminated_union_routes_sql(self):
         req = ExtractRequest.model_validate(
