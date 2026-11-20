@@ -1,14 +1,13 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { ArrowRight, Database, Edit, KeyRound, Layers, Plus, Trash2 } from 'lucide-react'
+import { CheckCircle2, Database, Edit, Loader2, Plus, Trash2 } from 'lucide-react'
 import { connectionsApi, type Connection } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { ConfirmDialog } from '@/components/shared/ConfirmDialog'
 import {
-  ConnectionRoleBadge,
   EngineLogo,
   getConnectorMeta,
   type ConnectorRole,
@@ -20,11 +19,13 @@ import { toast } from '@/hooks/use-toast'
 import { cn } from '@/lib/utils'
 
 type RoleFilter = 'all' | ConnectorRole
+type TestStatus = { state: 'idle' | 'testing' | 'ok' | 'error'; latency_ms?: number }
 
 export function ConnectionsPage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
   const [roleFilter, setRoleFilter] = useState<RoleFilter>('all')
+  const [testStates, setTestStates] = useState<Record<string, TestStatus>>({})
 
   const { data, isLoading } = useQuery({
     queryKey: queryKeys.connections.all,
@@ -40,6 +41,20 @@ export function ConnectionsPage() {
     onError: () => toast({ title: 'Failed to delete connection', variant: 'destructive' }),
   })
 
+  async function handleInlineTest(conn: Connection) {
+    setTestStates((prev) => ({ ...prev, [conn.id]: { state: 'testing' } }))
+    try {
+      const res = await connectionsApi.testById(conn.id)
+      setTestStates((prev) => ({
+        ...prev,
+        [conn.id]: { state: 'ok', latency_ms: res.data.latency_ms },
+      }))
+    } catch {
+      setTestStates((prev) => ({ ...prev, [conn.id]: { state: 'error' } }))
+      toast({ title: `Connection test failed for "${conn.name}"`, variant: 'destructive' })
+    }
+  }
+
   const connections = data ?? []
   const sources = connections.filter((c) => getConnectorMeta(c.type, c.name).role === 'source')
   const destinations = connections.filter((c) => getConnectorMeta(c.type, c.name).role === 'destination')
@@ -51,7 +66,7 @@ export function ConnectionsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Connections"
-        description="Configure read-only extraction sources and Bronze-layer Parquet destinations"
+        description="Manage extraction sources and Bronze storage targets."
         action={
           <Button onClick={() => navigate('/connections/new')}>
             <Plus className="h-3.5 w-3.5 mr-1.5" />
@@ -60,66 +75,38 @@ export function ConnectionsPage() {
         }
       />
 
-      {/* Unidirectional Architecture Callout */}
-      <Card className="bg-secondary/35 border-border/70">
-        <CardContent className="p-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div className="space-y-1">
-            <div className="text-xs font-semibold tracking-tight flex items-center gap-2">
-              <span>Unidirectional Bronze Ingestion Flow</span>
-              <Badge variant="outline" className="text-[10px] py-0">No Reverse ETL</Badge>
-            </div>
-            <p className="text-[11.5px] text-muted-foreground">
-              Sources (<span className="text-foreground font-medium">SQL, SFTP</span>) are strictly{' '}
-              <span className="text-foreground font-medium">read-only</span>. Siphon extracts batches and writes Snappy Parquet exclusively to Destinations (
-              <span className="text-foreground font-medium">S3, MinIO, GCS</span>).
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2 text-[11px] shrink-0 bg-card/90 border border-border/70 rounded-lg px-3 py-2 shadow-apple-sm">
-            <span className="font-medium text-sky-600 dark:text-sky-300">Source (Read)</span>
-            <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
-            <span className="text-muted-foreground">Siphon</span>
-            <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
-            <span className="font-medium text-emerald-600 dark:text-emerald-300">Destination (Parquet)</span>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Filter Segmented Control */}
       {connections.length > 0 && (
-        <div className="flex items-center justify-between">
-          <div
-            role="tablist"
-            aria-label="Filter connections by role"
-            className="inline-flex items-center gap-1 p-1 rounded-lg bg-secondary/80 border border-border/60"
-          >
-            {(
-              [
-                { id: 'all', label: `All (${connections.length})` },
-                { id: 'source', label: `Sources · Read (${sources.length})` },
-                { id: 'destination', label: `Destinations · Parquet (${destinations.length})` },
-              ] as const
-            ).map((tab) => {
-              const active = roleFilter === tab.id
-              return (
-                <button
-                  key={tab.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  onClick={() => setRoleFilter(tab.id)}
-                  className={cn(
-                    'px-3 py-1 rounded-md text-xs transition-all duration-150',
-                    active
-                      ? 'bg-card text-foreground font-medium shadow-apple-sm'
-                      : 'text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  {tab.label}
-                </button>
-              )
-            })}
-          </div>
+        <div
+          role="tablist"
+          aria-label="Filter connections"
+          className="inline-flex items-center gap-1 p-1 rounded-xl bg-secondary/80 border border-border/60"
+        >
+          {(
+            [
+              { id: 'all', label: `All (${connections.length})` },
+              { id: 'source', label: `Sources (${sources.length})` },
+              { id: 'destination', label: `Destinations (${destinations.length})` },
+            ] as const
+          ).map((tab) => {
+            const active = roleFilter === tab.id
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setRoleFilter(tab.id)}
+                className={cn(
+                  'px-3.5 py-1.5 rounded-lg text-xs transition-all duration-150',
+                  active
+                    ? 'bg-card text-foreground font-semibold shadow-apple-sm'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {tab.label}
+              </button>
+            )
+          })}
         </div>
       )}
 
@@ -131,32 +118,34 @@ export function ConnectionsPage() {
         <EmptyState
           icon={Database}
           title="No connections yet"
-          description="Add a SQL/SFTP source and an S3/GCS destination to start building Bronze pipelines."
+          description="Add a source and a Bronze destination to start building pipelines."
           action={{ label: 'Add Connection', onClick: () => navigate('/connections/new') }}
         />
       ) : (
-        <div className="space-y-8">
+        <div className="space-y-7">
           {showSources && (
             <ConnectionGroupSection
-              title="Sources — Read-Only Data Extraction"
-              subtitle="Databases and SFTP servers from which Siphon extracts rows or files. Cannot be used as pipeline destinations."
+              title={`SOURCES (${sources.length})`}
               items={sources}
-              emptyText="No source connections configured yet."
+              emptyText="No sources configured."
+              testStates={testStates}
               onSelect={(id) => navigate(`/connections/${id}`)}
               onEdit={(id) => navigate(`/connections/${id}/edit`)}
               onDelete={(id) => deleteMutation.mutate(id)}
+              onTest={handleInlineTest}
             />
           )}
 
           {showDestinations && (
             <ConnectionGroupSection
-              title="Destinations — Bronze Layer Object Storage"
-              subtitle="S3, MinIO, and Google Cloud Storage buckets where Siphon writes partitioned Parquet datasets."
+              title={`DESTINATIONS (${destinations.length})`}
               items={destinations}
-              emptyText="No destination connections configured yet."
+              emptyText="No destinations configured."
+              testStates={testStates}
               onSelect={(id) => navigate(`/connections/${id}`)}
               onEdit={(id) => navigate(`/connections/${id}/edit`)}
               onDelete={(id) => deleteMutation.mutate(id)}
+              onTest={handleInlineTest}
             />
           )}
         </div>
@@ -167,26 +156,29 @@ export function ConnectionsPage() {
 
 function ConnectionGroupSection({
   title,
-  subtitle,
   items,
   emptyText,
+  testStates,
   onSelect,
   onEdit,
   onDelete,
+  onTest,
 }: {
   title: string
-  subtitle: string
   items: Connection[]
   emptyText: string
+  testStates: Record<string, TestStatus>
   onSelect: (id: string) => void
   onEdit: (id: string) => void
   onDelete: (id: string) => void
+  onTest: (conn: Connection) => void
 }) {
   return (
     <section className="space-y-3">
-      <div>
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-foreground/90">{title}</h2>
-        <p className="text-[11.5px] text-muted-foreground mt-0.5">{subtitle}</p>
+      <div className="border-b border-border/60 pb-2">
+        <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+          {title}
+        </h2>
       </div>
 
       {items.length === 0 ? (
@@ -198,57 +190,82 @@ function ConnectionGroupSection({
           <CardContent className="p-0 divide-y divide-border/60">
             {items.map((conn) => {
               const meta = getConnectorMeta(conn.type, conn.name)
+              const status = testStates[conn.id]?.state ?? 'idle'
+              const latency = testStates[conn.id]?.latency_ms
+              const isError = status === 'error'
+
               return (
                 <div
                   key={conn.id}
-                  className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between px-5 py-3.5 cursor-pointer hover:bg-foreground/[0.025] transition-colors"
+                  className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between px-5 py-4 cursor-pointer hover:bg-foreground/[0.02] transition-colors"
                   onClick={() => onSelect(conn.id)}
                 >
                   <div className="flex items-center gap-3.5 min-w-0">
                     <EngineLogo type={conn.type} name={conn.name} size="md" />
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-xs font-semibold truncate">{conn.name}</span>
-                        <Badge variant="secondary" className="text-[10.5px]">
+                        <span className="text-[13px] font-semibold text-foreground truncate">
+                          {conn.name}
+                        </span>
+                        <Badge variant="secondary" className="text-[11px] font-medium">
                           {meta.engineName}
                         </Badge>
-                        <ConnectionRoleBadge type={conn.type} />
-                      </div>
-                      <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground mt-1 tabular-nums">
-                        <span>id: {conn.id.slice(0, 8)}…</span>
-                        {meta.role === 'source' && conn.max_concurrent_jobs != null && (
-                          <span className="inline-flex items-center gap-1">
-                            <Layers className="h-3 w-3" />
-                            max {conn.max_concurrent_jobs} concurrent {conn.max_concurrent_jobs === 1 ? 'job' : 'jobs'}
-                          </span>
+                        {meta.formatBadge && (
+                          <Badge variant="secondary" className="text-[11px] font-medium">
+                            {meta.formatBadge}
+                          </Badge>
                         )}
-                        <span className="inline-flex items-center gap-1">
-                          <KeyRound className="h-3 w-3" />
-                          encrypted key v{conn.key_version}
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2 text-[11.5px] text-muted-foreground mt-1 tabular-nums">
+                        <span className="inline-flex items-center gap-1.5">
+                          <span
+                            className={cn(
+                              'h-2 w-2 rounded-full',
+                              isError ? 'bg-rose-500' : 'bg-emerald-500',
+                            )}
+                          />
+                          <span className={cn(isError && 'text-rose-600 dark:text-rose-400')}>
+                            {isError
+                              ? 'Connection failed'
+                              : latency != null
+                                ? `Connected (${latency}ms)`
+                                : 'Connected'}
+                          </span>
                         </span>
+
+                        {meta.role === 'source' && conn.max_concurrent_jobs != null && (
+                          <>
+                            <span>•</span>
+                            <span>
+                              max {conn.max_concurrent_jobs} concurrent{' '}
+                              {conn.max_concurrent_jobs === 1 ? 'job' : 'jobs'}
+                            </span>
+                          </>
+                        )}
+
+                        <span>•</span>
+                        <span>encrypted key v{conn.key_version}</span>
                       </div>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-1.5 shrink-0">
+                  <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        onEdit(conn.id)
-                      }}
+                      onClick={() => onEdit(conn.id)}
                       className="text-muted-foreground hover:text-foreground"
                     >
-                      <Edit className="h-3.5 w-3.5 mr-1" />
+                      <Edit className="h-3.5 w-3.5 mr-1.5" />
                       Edit
                     </Button>
+
                     <ConfirmDialog
                       trigger={
                         <Button
                           variant="ghost"
                           size="icon"
-                          onClick={(e) => e.stopPropagation()}
                           className="text-muted-foreground hover:text-destructive"
                           aria-label={`Delete ${conn.name}`}
                         >
@@ -256,11 +273,26 @@ function ConnectionGroupSection({
                         </Button>
                       }
                       title="Delete connection?"
-                      description={`This will permanently delete "${conn.name}". Pipelines using this connection will break.`}
+                      description={`Permanently delete "${conn.name}"? Pipelines using this connection will break.`}
                       confirmLabel="Delete"
                       destructive
                       onConfirm={() => onDelete(conn.id)}
                     />
+
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={status === 'testing'}
+                      onClick={() => onTest(conn)}
+                      className="ml-1 rounded-lg"
+                    >
+                      {status === 'testing' ? (
+                        <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                      ) : (
+                        <CheckCircle2 className="h-3.5 w-3.5 mr-1.5 text-muted-foreground" />
+                      )}
+                      Test
+                    </Button>
                   </div>
                 </div>
               )

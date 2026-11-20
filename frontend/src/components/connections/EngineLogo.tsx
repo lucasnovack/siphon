@@ -1,4 +1,3 @@
-import { ArrowDownToLine, ArrowUpFromLine } from 'lucide-react'
 import type { Connection } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -8,13 +7,10 @@ export type SqlDialectHint = 'postgresql' | 'mysql' | 'oracle' | 'mssql' | 'sqli
 export interface ConnectorMeta {
   type: Connection['type']
   role: ConnectorRole
-  roleLabel: string
   title: string
   engineName: string
-  shortTag: string
+  formatBadge?: string
   summary: string
-  capabilities: string
-  directionRule: string
   protocolHint: string
   dialect: SqlDialectHint
 }
@@ -30,7 +26,7 @@ export function detectSqlDialect(nameOrUri = ''): SqlDialectHint {
   if (s.includes('oracle') || s.includes('ora')) {
     return 'oracle'
   }
-  if (s.includes('mssql') || s.includes('sqlserver') || s.includes('azure-sql')) {
+  if (s.includes('mssql') || s.includes('sqlserver') || s.includes('azure')) {
     return 'mssql'
   }
   if (s.includes('sqlite')) {
@@ -41,11 +37,11 @@ export function detectSqlDialect(nameOrUri = ''): SqlDialectHint {
 
 const SQL_DIALECT_LABELS: Record<SqlDialectHint, string> = {
   postgresql: 'PostgreSQL',
-  mysql: 'MySQL / MariaDB',
-  oracle: 'Oracle DB',
+  mysql: 'MySQL',
+  oracle: 'Oracle',
   mssql: 'SQL Server',
   sqlite: 'SQLite',
-  generic: 'SQL Database',
+  generic: 'PostgreSQL / SQL',
 }
 
 export function getConnectorMeta(type: string, connectionName = ''): ConnectorMeta {
@@ -55,15 +51,10 @@ export function getConnectorMeta(type: string, connectionName = ''): ConnectorMe
       return {
         type: 'sql',
         role: 'source',
-        roleLabel: 'Source · Read-Only',
         title: 'SQL Database',
         engineName: SQL_DIALECT_LABELS[dialect],
-        shortTag: 'SQL',
-        summary: 'Extract tables or custom SQL queries via ConnectorX / cursor streaming.',
-        capabilities: 'Full refresh, incremental watermark, and date-window backfill',
-        directionRule:
-          'Strictly a read-only extraction source. Siphon does not write back to SQL databases (no Reverse ETL).',
-        protocolHint: 'postgresql:// · mysql:// · oracle:// · mssql://',
+        summary: 'PostgreSQL, MySQL, Oracle, SQL Server',
+        protocolHint: 'postgresql:// · mysql:// · oracle://',
         dialect,
       }
     }
@@ -71,58 +62,41 @@ export function getConnectorMeta(type: string, connectionName = ''): ConnectorMe
       return {
         type: 'sftp',
         role: 'source',
-        roleLabel: 'Source · Read-Only',
         title: 'SFTP Server',
-        engineName: 'SSH File Transfer',
-        shortTag: 'SFTP',
-        summary: 'Ingest CSV, JSON/JSONL, and Avro batch files over SSH.',
-        capabilities: 'Batch file streaming, glob patterns, and processed-folder archiving',
-        directionRule:
-          'Strictly a read-only file source. Siphon extracts remote files and converts them to Bronze Parquet.',
-        protocolHint: 'sftp://host:22/path/*.csv',
+        engineName: 'SFTP',
+        summary: 'CSV, JSON, and Avro files over SSH',
+        protocolHint: 'sftp://host:22/path',
         dialect: 'generic',
       }
     case 's3_parquet':
       return {
         type: 's3_parquet',
         role: 'destination',
-        roleLabel: 'Destination · Bronze Parquet',
         title: 'Amazon S3 / MinIO',
         engineName: 'S3 Object Storage',
-        shortTag: 'S3',
-        summary: 'Write Snappy-compressed Parquet datasets to AWS S3 or MinIO.',
-        capabilities: 'Atomic _staging promote, Hive _date partitioning, and GDPR purge',
-        directionRule:
-          'Write-only Bronze destination. Receives extracted Arrow batches as Parquet files (cannot be used as a pipeline source).',
-        protocolHint: 's3://bronze/<dataset>/',
+        formatBadge: 'Parquet',
+        summary: 'AWS S3 or S3-compatible MinIO buckets',
+        protocolHint: 's3://bronze/dataset/',
         dialect: 'generic',
       }
     case 'gcs_parquet':
       return {
         type: 'gcs_parquet',
         role: 'destination',
-        roleLabel: 'Destination · Bronze Parquet',
         title: 'Google Cloud Storage',
-        engineName: 'GCP Cloud Storage',
-        shortTag: 'GCS',
-        summary: 'Write Snappy-compressed Parquet datasets to Google Cloud Storage buckets.',
-        capabilities: 'ADC / GCP VM Metadata Server, Service Account JSON, atomic staging, and GDPR purge',
-        directionRule:
-          'Write-only Bronze destination. Receives extracted Arrow batches as Parquet files on gs:// (cannot be used as a pipeline source).',
-        protocolHint: 'gs://bronze/<dataset>/',
+        engineName: 'Google Cloud Storage',
+        formatBadge: 'Parquet',
+        summary: 'GCS buckets via ADC / Workload Identity or SA JSON',
+        protocolHint: 'gs://bronze/dataset/',
         dialect: 'generic',
       }
     default:
       return {
         type: 'sql',
         role: 'source',
-        roleLabel: 'Source',
         title: type,
         engineName: type,
-        shortTag: type.toUpperCase(),
-        summary: 'Data connector',
-        capabilities: '',
-        directionRule: '',
+        summary: '',
         protocolHint: '',
         dialect: 'generic',
       }
@@ -153,122 +127,174 @@ export function EngineLogo({ type, name = '', size = 'md', className }: EngineLo
 
   return (
     <div
-      title={`${meta.engineName} (${meta.roleLabel})`}
+      title={meta.engineName}
       className={cn(
-        'relative flex items-center justify-center shrink-0 border border-border/80 bg-secondary/70 text-foreground shadow-apple-sm select-none',
+        'relative flex items-center justify-center shrink-0 border border-border/80 bg-card shadow-apple-sm select-none',
         boxSizes[size],
         className,
       )}
     >
-      {type === 'sql' && <SqlEngineSvg dialect={meta.dialect} className={iconSizes[size]} />}
-      {type === 'sftp' && <SftpEngineSvg className={iconSizes[size]} />}
-      {type === 's3_parquet' && <S3EngineSvg className={iconSizes[size]} />}
-      {type === 'gcs_parquet' && <GcsEngineSvg className={iconSizes[size]} />}
+      {type === 'sql' && <SqlBrandLogo dialect={meta.dialect} className={iconSizes[size]} />}
+      {type === 'sftp' && <SftpBrandLogo className={iconSizes[size]} />}
+      {type === 's3_parquet' && <S3BrandLogo name={name} className={iconSizes[size]} />}
+      {type === 'gcs_parquet' && <GcsBrandLogo className={iconSizes[size]} />}
     </div>
   )
 }
 
-export function ConnectionRoleBadge({
-  type,
-  className,
-}: {
-  type: string
-  className?: string
-}) {
-  const meta = getConnectorMeta(type)
-  const isSource = meta.role === 'source'
+/* ── Recognizable Brand Vector Logos ─────────────────────────────────────── */
 
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[10.5px] font-medium tracking-tight',
-        isSource
-          ? 'border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300'
-          : 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
-        className,
-      )}
-    >
-      {isSource ? (
-        <ArrowUpFromLine className="h-3 w-3 shrink-0" />
-      ) : (
-        <ArrowDownToLine className="h-3 w-3 shrink-0" />
-      )}
-      {isSource ? 'Source · Extract' : 'Destination · Parquet'}
-    </span>
-  )
-}
-
-/* ── Distinct Engine Vector Emblems ──────────────────────────────────────── */
-
-function SqlEngineSvg({ dialect, className }: { dialect: SqlDialectHint; className?: string }) {
-  if (dialect === 'postgresql') {
-    return (
-      <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-        <ellipse cx="12" cy="5.5" rx="7" ry="2.8" stroke="currentColor" strokeWidth="1.7" />
-        <path d="M5 5.5v6c0 1.55 3.13 2.8 7 2.8s7-1.25 7-2.8v-6" stroke="currentColor" strokeWidth="1.7" />
-        <path d="M5 11.5v6c0 1.55 3.13 2.8 7 2.8s7-1.25 7-2.8v-6" stroke="currentColor" strokeWidth="1.7" />
-        <circle cx="15.5" cy="11.2" r="1" fill="currentColor" />
-      </svg>
-    )
-  }
+function SqlBrandLogo({ dialect, className }: { dialect: SqlDialectHint; className?: string }) {
   if (dialect === 'mysql') {
+    // MySQL brand teal/orange mark
     return (
       <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
         <path
-          d="M4 17.5c2.2-4.8 5.6-8.5 10.5-9.5 1.8-.3 3.8.2 5.5 1.5-1.8 1.2-2.8 2.8-3.2 4.8 1.4.3 2.5 1 3.2 2.2-2.2.4-4.2-.2-5.8-1.5-2.6 1.5-5.2 2.5-10.2 2.5Z"
-          stroke="currentColor"
-          strokeWidth="1.7"
+          d="M4.2 17.2c2-4.6 5.4-8.2 10.2-9.2 1.9-.3 3.9.2 5.4 1.4-1.7 1.2-2.7 2.7-3.1 4.6 1.3.3 2.4 1 3.1 2.1-2.1.4-4-.2-5.6-1.4-2.5 1.4-5 2.5-10 2.5Z"
+          fill="#00758F"
+          fillOpacity="0.18"
+          stroke="#00758F"
+          strokeWidth="1.6"
           strokeLinejoin="round"
         />
-        <circle cx="14.5" cy="10.5" r="1" fill="currentColor" />
+        <circle cx="14.5" cy="10.4" r="1.1" fill="#F29111" />
       </svg>
     )
   }
+
+  if (dialect === 'oracle') {
+    // Oracle signature red capsule mark
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+        <rect
+          x="3.2"
+          y="7.5"
+          width="17.6"
+          height="9"
+          rx="4.5"
+          stroke="#F80000"
+          strokeWidth="2.1"
+        />
+      </svg>
+    )
+  }
+
+  // Default / PostgreSQL elephant shield + database mark in Postgres Blue (#336791)
   return (
     <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-      <ellipse cx="12" cy="5.5" rx="7" ry="2.7" stroke="currentColor" strokeWidth="1.7" />
-      <path d="M5 5.5v6.2c0 1.5 3.13 2.7 7 2.7s7-1.2 7-2.7V5.5" stroke="currentColor" strokeWidth="1.7" />
-      <path d="M5 11.7v6.3c0 1.5 3.13 2.7 7 2.7s7-1.2 7-2.7v-6.3" stroke="currentColor" strokeWidth="1.7" />
+      {/* Postgres blue elephant ear + trunk silhouette */}
+      <path
+        d="M12 3.5c-4.4 0-7.5 2.4-7.5 6.2 0 2.4 1.3 4.3 3.2 5.1V18c0 1.4 1.1 2.5 2.5 2.5.9 0 1.7-.5 2.1-1.2.4.7 1.2 1.2 2.1 1.2 1.4 0 2.5-1.1 2.5-2.5v-2.2c1.6-.9 2.6-2.7 2.6-5.1 0-3.8-3.1-7.2-7.5-7.2Z"
+        fill="#336791"
+        fillOpacity="0.18"
+        stroke="#336791"
+        strokeWidth="1.65"
+        strokeLinejoin="round"
+      />
+      {/* Trunk & tusks */}
+      <path
+        d="M12 8.5v7.5c0 1.1.7 2 1.7 2s1.7-.8 1.7-1.8"
+        stroke="#336791"
+        strokeWidth="1.65"
+        strokeLinecap="round"
+      />
+      <circle cx="9.6" cy="9.8" r="1" fill="#336791" />
+      <circle cx="14.6" cy="9.8" r="1" fill="#336791" />
     </svg>
   )
 }
 
-function SftpEngineSvg({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-      <rect x="3.5" y="4.5" width="17" height="6" rx="1.8" stroke="currentColor" strokeWidth="1.7" />
-      <rect x="3.5" y="13.5" width="17" height="6" rx="1.8" stroke="currentColor" strokeWidth="1.7" />
-      <circle cx="7" cy="7.5" r="1" fill="currentColor" />
-      <circle cx="7" cy="16.5" r="1" fill="currentColor" />
-      <path d="M11.5 7.5h5.5M11.5 16.5h5.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-    </svg>
-  )
-}
+function S3BrandLogo({ name = '', className }: { name?: string; className?: string }) {
+  const isMinio = name.toLowerCase().includes('minio')
+  const primary = isMinio ? '#C72C48' : '#E25444'
+  const secondary = isMinio ? '#E85D75' : '#F58536'
 
-function S3EngineSvg({ className }: { className?: string }) {
+  // AWS S3 / MinIO 3D Storage Cube + Bucket emblem
   return (
     <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
       <path
-        d="M12 3.2 19.5 7.5v9L12 20.8 4.5 16.5v-9L12 3.2Z"
-        stroke="currentColor"
-        strokeWidth="1.7"
+        d="M12 2.8 20 7.3v9.4L12 21.2 4 16.7V7.3L12 2.8Z"
+        fill={primary}
+        fillOpacity="0.16"
+        stroke={primary}
+        strokeWidth="1.65"
         strokeLinejoin="round"
       />
-      <path d="M4.5 7.5 12 12l7.5-4.5M12 12v8.8" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+      <path
+        d="M4 7.3 12 11.8l8-4.5"
+        stroke={secondary}
+        strokeWidth="1.65"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M12 11.8v9.4"
+        stroke={primary}
+        strokeWidth="1.65"
+        strokeLinecap="round"
+      />
+      <circle cx="12" cy="7.2" r="1.4" fill={secondary} />
     </svg>
   )
 }
 
-function GcsEngineSvg({ className }: { className?: string }) {
+function GcsBrandLogo({ className }: { className?: string }) {
+  // Google Cloud Storage official multi-color cloud + storage bars
   return (
     <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      {/* Top arc — Google Red */}
       <path
-        d="M7.2 18.5h9.8a4.3 4.3 0 0 0 .6-8.55A5.8 5.8 0 0 0 6.3 8.3 3.9 3.9 0 0 0 7.2 18.5Z"
-        stroke="currentColor"
+        d="M7.8 9.2A5.3 5.3 0 0 1 17.5 9"
+        stroke="#EA4335"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+      {/* Right arc — Google Blue */}
+      <path
+        d="M17.5 9a4 4 0 0 1-.3 8H12"
+        stroke="#4285F4"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+      {/* Bottom-left arc — Google Green & Yellow */}
+      <path
+        d="M12 17H7.2a3.7 3.7 0 0 1-.6-7.35"
+        stroke="#34A853"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+      <path
+        d="M6.6 9.65A4 4 0 0 1 7.8 9.2"
+        stroke="#FBBC05"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+      {/* Storage bar inside cloud */}
+      <rect x="9.5" y="12.2" width="5" height="2" rx="1" fill="#4285F4" />
+    </svg>
+  )
+}
+
+function SftpBrandLogo({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <rect
+        x="3.2"
+        y="4.5"
+        width="17.6"
+        height="15"
+        rx="2.5"
+        fill="#10B981"
+        fillOpacity="0.14"
+        stroke="#10B981"
+        strokeWidth="1.65"
+      />
+      <path
+        d="m7.5 10 2.5 2-2.5 2M12 14h4.5"
+        stroke="#10B981"
         strokeWidth="1.7"
+        strokeLinecap="round"
         strokeLinejoin="round"
       />
-      <path d="M9.5 13.5h5M9.5 16h3.2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
   )
 }
