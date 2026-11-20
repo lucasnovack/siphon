@@ -31,27 +31,27 @@
 
   .dark {
     color-scheme: dark;
-    --background: 240 6% 6%;
-    --foreground: 0 0% 95%;
-    --card: 240 5% 9%;
-    --card-foreground: 0 0% 95%;
-    --popover: 240 5% 10%;
-    --popover-foreground: 0 0% 95%;
-    --primary: 0 0% 96%;
-    --primary-foreground: 240 6% 8%;
-    --secondary: 240 4% 15%;
-    --secondary-foreground: 0 0% 92%;
-    --muted: 240 4% 14%;
-    --muted-foreground: 240 5% 58%;
-    --accent: 240 4% 16%;
-    --accent-foreground: 0 0% 96%;
-    --destructive: 0 68% 55%;
+    --background: 240 7% 10%;
+    --foreground: 0 0% 97%;
+    --card: 240 6% 14.5%;
+    --card-foreground: 0 0% 97%;
+    --popover: 240 6% 16.5%;
+    --popover-foreground: 0 0% 97%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 240 7% 10%;
+    --secondary: 240 5% 20%;
+    --secondary-foreground: 0 0% 95%;
+    --muted: 240 5% 19%;
+    --muted-foreground: 240 5% 68%;
+    --accent: 240 5% 22%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 72% 58%;
     --destructive-foreground: 0 0% 98%;
-    --warning: 38 92% 50%;
-    --warning-foreground: 0 0% 100%;
-    --border: 240 4% 17%;
-    --input: 240 4% 19%;
-    --ring: 240 5% 70%;
+    --warning: 38 92% 55%;
+    --warning-foreground: 240 7% 10%;
+    --border: 240 5% 24%;
+    --input: 240 5% 26%;
+    --ring: 240 5% 75%;
   }
 }
 
