@@ -207,51 +207,78 @@ async def _run_job_async(
             await engine.dispose()
 
 
+def _build_purge_fs(base_path: str, dest_config: dict | None = None):
+    """Build a PyArrow FileSystem and scheme prefix for S3 or GCS purge operations."""
+    import os
+
+    import pyarrow.fs as pafs
+
+    cfg = dest_config or {}
+    is_gcs = base_path.startswith("gs://") or cfg.get("type") == "gcs_parquet"
+    if is_gcs:
+        from siphon.plugins.destinations.gcs_auth import build_gcs_filesystem
+
+        fs = build_gcs_filesystem(
+            auth_mode=cfg.get("auth_mode") or "adc",
+            credentials_json=cfg.get("credentials_json") or None,
+            project_id=cfg.get("project_id") or None,
+            target_service_account=cfg.get("target_service_account") or None,
+            endpoint_override=cfg.get("endpoint_override") or None,
+            scheme=cfg.get("scheme") or None,
+        )
+        return fs, "gs://"
+
+    endpoint = cfg.get("endpoint") or os.getenv("SIPHON_S3_ENDPOINT", "http://minio:9000")
+    access_key = cfg.get("access_key") or os.getenv("SIPHON_S3_ACCESS_KEY", "")
+    secret_key = cfg.get("secret_key") or os.getenv("SIPHON_S3_SECRET_KEY", "")
+    scheme = os.getenv("SIPHON_S3_SCHEME", "https")
+    fs_kwargs: dict = {
+        "endpoint_override": endpoint,
+        "access_key": access_key,
+        "secret_key": secret_key,
+    }
+    if not endpoint.startswith(("http://", "https://")):
+        fs_kwargs["scheme"] = scheme
+    fs = pafs.S3FileSystem(**fs_kwargs)
+    prefix = "s3a://" if base_path.startswith("s3a://") else "s3://"
+    return fs, prefix
+
+
 def _purge_s3_files(
     base_path: str,
     before_date,
     partition_filter: str | None,
     list_fn=None,
     delete_fn=None,
+    dest_config: dict | None = None,
 ) -> dict:
-    """List and delete Parquet files under base_path matching the given filters.
+    """List and delete Parquet files under base_path (S3 or GCS) matching filters.
 
     list_fn and delete_fn are injectable for testing. In production they use
-    PyArrow S3FileSystem.
+    PyArrow S3FileSystem or GcsFileSystem depending on the path scheme.
     """
-    import os
+    if list_fn is None or delete_fn is None:
+        import pyarrow.fs as pafs
 
-    if list_fn is None:
-        def list_fn(path):
-            import pyarrow.fs as pafs
-            endpoint = os.getenv("SIPHON_S3_ENDPOINT", "http://minio:9000")
-            access_key = os.getenv("SIPHON_S3_ACCESS_KEY", "")
-            secret_key = os.getenv("SIPHON_S3_SECRET_KEY", "")
-            fs = pafs.S3FileSystem(
-                endpoint_override=endpoint,
-                access_key=access_key,
-                secret_key=secret_key,
-            )
-            bucket_path = path.removeprefix("s3://")
-            file_info = fs.get_file_info(pafs.FileSelector(bucket_path, recursive=True))
-            return [
-                "s3://" + f.path
-                for f in file_info
-                if f.is_file and f.path.endswith(".parquet")
-            ]
+        fs, scheme_prefix = _build_purge_fs(base_path, dest_config)
 
-    if delete_fn is None:
-        def delete_fn(path):
-            import pyarrow.fs as pafs2
-            fs = pafs2.S3FileSystem(
-                endpoint_override=os.getenv("SIPHON_S3_ENDPOINT", "http://minio:9000"),
-                access_key=os.getenv("SIPHON_S3_ACCESS_KEY", ""),
-                secret_key=os.getenv("SIPHON_S3_SECRET_KEY", ""),
-            )
-            info = fs.get_file_info(path.removeprefix("s3://"))
-            size = info.size or 0
-            fs.delete_file(path.removeprefix("s3://"))
-            return size
+        if list_fn is None:
+            def list_fn(path):
+                bucket_path = path.removeprefix("s3a://").removeprefix("s3://").removeprefix("gs://")
+                file_info = fs.get_file_info(pafs.FileSelector(bucket_path, recursive=True))
+                return [
+                    scheme_prefix + f.path
+                    for f in file_info
+                    if f.is_file and f.path.endswith(".parquet")
+                ]
+
+        if delete_fn is None:
+            def delete_fn(path):
+                key = path.removeprefix("s3a://").removeprefix("s3://").removeprefix("gs://")
+                info = fs.get_file_info(key)
+                size = info.size or 0
+                fs.delete_file(key)
+                return size
 
     files = list_fn(base_path)
 
@@ -290,16 +317,22 @@ def purge_s3_data_task(
     base_path: str,
     before_date_str: str | None,
     partition_filter: str | None,
+    dest_config: dict | None = None,
 ) -> None:
-    """Background Celery task: purge Parquet files and update gdpr_events row."""
+    """Background Celery task: purge Parquet files (S3 or GCS) and update gdpr_events row."""
     from datetime import date as date_type
 
     before_date = date_type.fromisoformat(before_date_str) if before_date_str else None
 
     try:
-        result = _purge_s3_files(base_path, before_date, partition_filter)
+        result = _purge_s3_files(
+            base_path,
+            before_date,
+            partition_filter,
+            dest_config=dest_config,
+        )
     except Exception as exc:
-        logger.error("S3 purge failed", event_id=event_id, error=str(exc))
+        logger.error("Object store purge failed", event_id=event_id, error=str(exc))
         raise self.retry(exc=exc) from exc
 
     asyncio.run(_update_gdpr_event(event_id, result))

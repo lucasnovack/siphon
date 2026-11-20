@@ -142,3 +142,32 @@ def test_list_gdpr_events_returns_200(client):
     assert resp.status_code == 200
     assert len(resp.json()) == 1
     assert resp.json()[0]["status"] == "completed"
+
+
+def test_purge_gcs_path_uses_gcs_filesystem_and_filters_by_date():
+    """_purge_s3_files must support gs:// paths via build_gcs_filesystem."""
+    from datetime import date as date_type
+
+    from siphon.tasks import _purge_s3_files
+
+    f_old = MagicMock(is_file=True, path="bronze/orders/_date=2025-01-10/part-0.parquet", size=512)
+    f_new = MagicMock(is_file=True, path="bronze/orders/_date=2026-11-20/part-0.parquet", size=1024)
+    mock_fs = MagicMock()
+    mock_fs.get_file_info.side_effect = [
+        [f_old, f_new],  # FileSelector listing
+        f_old,           # size lookup before delete
+    ]
+
+    with patch("siphon.plugins.destinations.gcs_auth.build_gcs_filesystem", return_value=mock_fs) as mock_build:
+        result = _purge_s3_files(
+            base_path="gs://bronze/orders",
+            before_date=date_type(2026, 1, 1),
+            partition_filter=None,
+            dest_config={"type": "gcs_parquet", "auth_mode": "adc", "project_id": "gcp-proj"},
+        )
+
+    mock_build.assert_called_once()
+    assert mock_build.call_args.kwargs["auth_mode"] == "adc"
+    assert mock_build.call_args.kwargs["project_id"] == "gcp-proj"
+    mock_fs.delete_file.assert_called_once_with("bronze/orders/_date=2025-01-10/part-0.parquet")
+    assert result == {"files_deleted": 1, "bytes_deleted": 512}

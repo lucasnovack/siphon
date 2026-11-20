@@ -25,19 +25,19 @@ def _require_admin(principal: Principal) -> None:
         raise HTTPException(403, "Admin access required")
 
 
-def _count_s3_files(base_path: str, partition_filter: str | None) -> int:
-    """Count Parquet files matching the path + filter. Used to decide sync vs async purge."""
-    import os
-
+def _count_s3_files(
+    base_path: str,
+    partition_filter: str | None,
+    dest_config: dict | None = None,
+) -> int:
+    """Count Parquet files matching the path + filter (S3 or GCS). Used to decide sync vs async purge."""
     import pyarrow.fs as pafs
 
+    from siphon.tasks import _build_purge_fs
+
     try:
-        fs = pafs.S3FileSystem(
-            endpoint_override=os.getenv("SIPHON_S3_ENDPOINT", "http://minio:9000"),
-            access_key=os.getenv("SIPHON_S3_ACCESS_KEY", ""),
-            secret_key=os.getenv("SIPHON_S3_SECRET_KEY", ""),
-        )
-        bucket_path = base_path.removeprefix("s3://")
+        fs, _ = _build_purge_fs(base_path, dest_config)
+        bucket_path = base_path.removeprefix("s3a://").removeprefix("s3://").removeprefix("gs://")
         file_info = fs.get_file_info(pafs.FileSelector(bucket_path, recursive=True))
         files = [f for f in file_info if f.is_file and f.path.endswith(".parquet")]
         if partition_filter:
@@ -47,10 +47,16 @@ def _count_s3_files(base_path: str, partition_filter: str | None) -> int:
         return 0
 
 
-def _purge_s3_files(base_path: str, before_date, partition_filter: str | None) -> dict:
+def _purge_s3_files(
+    base_path: str,
+    before_date,
+    partition_filter: str | None,
+    dest_config: dict | None = None,
+) -> dict:
     """Synchronous purge — called directly for small volumes."""
     from siphon.tasks import _purge_s3_files as _task_purge
-    return _task_purge(base_path, before_date, partition_filter)
+
+    return _task_purge(base_path, before_date, partition_filter, dest_config=dest_config)
 
 
 class GdprEventResponse(BaseModel):
@@ -81,6 +87,27 @@ def _to_event_response(e: GdprEvent) -> GdprEventResponse:
     )
 
 
+async def _load_dest_config(db: AsyncSession, pipeline: Pipeline) -> dict | None:
+    """Load decrypted destination connection config for the pipeline, if configured."""
+    dest_conn_id = getattr(pipeline, "dest_connection_id", None)
+    if not isinstance(dest_conn_id, uuid.UUID):
+        return None
+    import json
+
+    from siphon.crypto import decrypt
+    from siphon.orm import Connection
+
+    dest_conn = await db.get(Connection, dest_conn_id)
+    if dest_conn is None or not getattr(dest_conn, "encrypted_config", None):
+        return None
+    try:
+        cfg = json.loads(decrypt(dest_conn.encrypted_config))
+        cfg["type"] = dest_conn.conn_type
+        return cfg
+    except Exception:
+        return None
+
+
 @router.delete("/api/v1/pipelines/{pipeline_id}/data")
 async def purge_pipeline_data(
     pipeline_id: uuid.UUID,
@@ -95,6 +122,7 @@ async def purge_pipeline_data(
     if pipeline is None:
         raise HTTPException(404, "Pipeline not found")
 
+    dest_config = await _load_dest_config(db, pipeline)
     base_path = pipeline.destination_path
     now = datetime.now(tz=UTC)
     event = GdprEvent(
@@ -110,10 +138,17 @@ async def purge_pipeline_data(
     await db.commit()
     await db.refresh(event)
 
-    file_count = _count_s3_files(base_path, partition)
+    file_count = (
+        _count_s3_files(base_path, partition, dest_config=dest_config)
+        if dest_config is not None
+        else _count_s3_files(base_path, partition)
+    )
 
     if file_count >= _LARGE_PURGE_THRESHOLD:
         # Async path — dispatch Celery task and return 202
+        apply_kwargs: dict[str, Any] = {"queue": "normal"}
+        if dest_config is not None:
+            apply_kwargs["kwargs"] = {"dest_config": dest_config}
         purge_s3_data_task.apply_async(
             args=[
                 str(event.id),
@@ -121,7 +156,7 @@ async def purge_pipeline_data(
                 before.isoformat() if before else None,
                 partition,
             ],
-            queue="normal",
+            **apply_kwargs,
         )
         logger.info(
             "Large purge dispatched",
@@ -140,7 +175,11 @@ async def purge_pipeline_data(
         )
 
     # Sync path — purge inline
-    result = _purge_s3_files(base_path, before, partition)
+    result = (
+        _purge_s3_files(base_path, before, partition, dest_config=dest_config)
+        if dest_config is not None
+        else _purge_s3_files(base_path, before, partition)
+    )
     event.status = "completed"
     event.files_deleted = result["files_deleted"]
     event.bytes_deleted = result["bytes_deleted"]
