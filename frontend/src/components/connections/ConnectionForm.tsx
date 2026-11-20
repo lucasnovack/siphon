@@ -55,7 +55,14 @@ export function ConnectionForm({ initialValues, editing = false, onSubmit, submi
   function handleTypeChange(val: string) {
     setSelectedType(val)
     setValue('type', val)
-    setDynamicFields({})
+    const def = types?.find((t: ConnectionType) => t.type === val)
+    const defaults: Record<string, string> = {}
+    for (const field of def?.fields ?? []) {
+      if (field.default !== undefined && field.default !== null) {
+        defaults[field.name] = String(field.default)
+      }
+    }
+    setDynamicFields(defaults)
   }
 
   function handleDynamicChange(fieldName: string, value: string) {
@@ -79,6 +86,8 @@ export function ConnectionForm({ initialValues, editing = false, onSubmit, submi
     await onSubmit({ ...base, config: dynamicFields })
   }
 
+  const gcsAuthMode = selectedType === 'gcs_parquet' ? (dynamicFields.auth_mode || 'adc') : ''
+
   return (
     <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-4">
       <div className="space-y-2">
@@ -91,7 +100,7 @@ export function ConnectionForm({ initialValues, editing = false, onSubmit, submi
         <Label>Type</Label>
         {editing ? (
           <div className="flex h-10 w-full items-center rounded-md border border-input bg-muted px-3 text-sm text-muted-foreground">
-            {selectedType}
+            {currentTypeDef?.label ?? selectedType}
           </div>
         ) : (
           <Select value={selectedType} onValueChange={handleTypeChange}>
@@ -101,7 +110,7 @@ export function ConnectionForm({ initialValues, editing = false, onSubmit, submi
             <SelectContent>
               {(types ?? []).map((t: ConnectionType) => (
                 <SelectItem key={t.type} value={t.type}>
-                  {t.type}
+                  {t.label ?? t.type}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -111,22 +120,58 @@ export function ConnectionForm({ initialValues, editing = false, onSubmit, submi
       </div>
 
       {currentTypeDef?.fields.map((field) => {
-        const isSecret = field.name.toLowerCase().includes('password') || field.name.toLowerCase().includes('secret')
+        if (selectedType === 'gcs_parquet' && field.name === 'credentials_json' && gcsAuthMode !== 'service_account') {
+          return null
+        }
+
+        const isSecret = Boolean(field.secret) || field.name.toLowerCase().includes('password') || field.name.toLowerCase().includes('secret')
         const placeholder = editing
           ? (isSecret ? '••••••••  (leave blank to keep current)' : '(leave blank to keep current)')
           : (field.placeholder ?? field.name)
+        const value = dynamicFields[field.name] ?? (field.default !== undefined ? String(field.default) : '')
+
         return (
           <div key={field.name} className="space-y-2">
             <Label>
               {field.label ?? field.name}
               {field.required && !editing && <span className="text-destructive ml-1">*</span>}
             </Label>
-            <Input
-              type={isSecret ? 'password' : 'text'}
-              placeholder={placeholder}
-              value={dynamicFields[field.name] ?? ''}
-              onChange={(e) => handleDynamicChange(field.name, e.target.value)}
-            />
+            {field.type === 'select' && field.options ? (
+              <>
+                <Select value={value} onValueChange={(v) => handleDynamicChange(field.name, v)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder={placeholder} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {field.options.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {selectedType === 'gcs_parquet' && field.name === 'auth_mode' && gcsAuthMode === 'adc' && (
+                  <p className="text-xs text-muted-foreground">
+                    Automatically uses the attached GCP VM Service Account, GKE Workload Identity, Cloud Run identity, or GOOGLE_APPLICATION_CREDENTIALS — no key JSON required.
+                  </p>
+                )}
+              </>
+            ) : field.type === 'textarea' ? (
+              <textarea
+                rows={5}
+                className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-xs font-mono ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                placeholder={placeholder}
+                value={value}
+                onChange={(e) => handleDynamicChange(field.name, e.target.value)}
+              />
+            ) : (
+              <Input
+                type={isSecret ? 'password' : 'text'}
+                placeholder={placeholder}
+                value={value}
+                onChange={(e) => handleDynamicChange(field.name, e.target.value)}
+              />
+            )}
           </div>
         )
       })}

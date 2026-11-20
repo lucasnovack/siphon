@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 interface ConnectionSelectProps {
   value: string
   onChange: (value: string) => void
-  filterType?: Connection['type']
+  filterType?: Connection['type'] | Connection['type'][]
   onCreateNew?: () => void
   placeholder?: string
   error?: string
@@ -27,8 +27,12 @@ export function ConnectionSelect({
     queryFn: () => connectionsApi.list().then((r) => r.data),
   })
 
-  const options = filterType
-    ? (data ?? []).filter((c) => c.type === filterType)
+  const allowedTypes = filterType
+    ? (Array.isArray(filterType) ? filterType : [filterType])
+    : null
+
+  const options = allowedTypes
+    ? (data ?? []).filter((c) => allowedTypes.includes(c.type))
     : (data ?? [])
 
   return (

@@ -85,10 +85,15 @@ export interface ListEnvelope<T> {
 export interface Connection {
   id: string
   name: string
-  type: 'sql' | 'sftp' | 's3_parquet'
+  type: 'sql' | 'sftp' | 's3_parquet' | 'gcs_parquet'
   key_version: number
   created_at: string
   updated_at: string
+}
+
+export interface ConnectionTypeFieldOption {
+  value: string
+  label: string
 }
 
 export interface ConnectionTypeField {
@@ -97,11 +102,14 @@ export interface ConnectionTypeField {
   label?: string
   required?: boolean
   secret?: boolean
+  default?: string | number
   placeholder?: string
+  options?: ConnectionTypeFieldOption[]
 }
 
 export interface ConnectionType {
   type: string
+  label?: string
   fields: ConnectionTypeField[]
 }
 

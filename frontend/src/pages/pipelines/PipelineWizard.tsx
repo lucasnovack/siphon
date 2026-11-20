@@ -239,13 +239,13 @@ export function PipelineWizard() {
                 <ConnectionSelect
                   value={step3.dest_conn}
                   onChange={(v) => setStep3((s) => ({ ...s, dest_conn: v }))}
-                  filterType="s3_parquet"
+                  filterType={['s3_parquet', 'gcs_parquet']}
                 />
               </div>
               <div className="space-y-2">
-                <Label>S3 Prefix</Label>
+                <Label>Destination Path / Prefix</Label>
                 <Input
-                  placeholder="bronze/my-table/"
+                  placeholder="bronze/my-table/ (or gs://bronze/my-table/)"
                   value={step3.dest_prefix}
                   onChange={(e) => setStep3((s) => ({ ...s, dest_prefix: e.target.value }))}
                 />
