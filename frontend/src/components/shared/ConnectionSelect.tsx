@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Plus } from 'lucide-react'
 import { connectionsApi, type Connection } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
+import { getConnectorMeta } from '@/components/connections/EngineLogo'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
 
@@ -43,12 +44,17 @@ export function ConnectionSelect({
             <SelectValue placeholder={placeholder} />
           </SelectTrigger>
           <SelectContent>
-            {options.map((c) => (
-              <SelectItem key={c.id} value={c.id}>
-                <span className="font-medium">{c.name}</span>
-                <span className="ml-2 text-xs text-muted-foreground">{c.type}</span>
-              </SelectItem>
-            ))}
+            {options.map((c) => {
+              const meta = getConnectorMeta(c.type, c.name)
+              return (
+                <SelectItem key={c.id} value={c.id}>
+                  <span className="font-medium">{c.name}</span>
+                  <span className="ml-2 text-[11px] text-muted-foreground">
+                    {meta.engineName} · {meta.role === 'source' ? 'Source' : 'Destination'}
+                  </span>
+                </SelectItem>
+              )
+            })}
             {options.length === 0 && (
               <div className="p-2 text-sm text-muted-foreground text-center">No connections found</div>
             )}

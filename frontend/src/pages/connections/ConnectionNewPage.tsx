@@ -23,9 +23,10 @@ export function ConnectionNewPage() {
   })
 
   return (
-    <div className="max-w-lg">
+    <div className="max-w-2xl">
       <PageHeader
         title="New Connection"
+        description="Choose a read-only extraction source or a Bronze Parquet destination"
         breadcrumb={<span>Connections / New</span>}
       />
       <ConnectionForm

@@ -35,9 +35,10 @@ export function ConnectionEditPage() {
   if (loadError || !conn) return <ApiErrorMessage error={loadError} />
 
   return (
-    <div className="max-w-lg">
+    <div className="max-w-2xl">
       <PageHeader
         title={`Edit — ${conn.name}`}
+        description="Update connection name, concurrency limits, or rotate encrypted credentials"
         breadcrumb={
           <>
             <Link to="/connections" className="hover:underline">Connections</Link>
@@ -47,14 +48,22 @@ export function ConnectionEditPage() {
         }
       />
       <ConnectionForm
-        initialValues={{ name: conn.name, type: conn.type }}
+        initialValues={{
+          name: conn.name,
+          type: conn.type,
+          max_concurrent_jobs: conn.max_concurrent_jobs ?? 2,
+          key_version: conn.key_version,
+        }}
         editing
         onSubmit={async (data) => {
           setError(null)
-          const payload: Record<string, unknown> = { name: data.name as string }
-          // Only send config if the user filled in at least one field
+          const payload: Record<string, unknown> = {
+            name: data.name as string,
+            max_concurrent_jobs: Number(data.max_concurrent_jobs ?? 2),
+          }
+          // Only send config if the user opted to rotate credentials and filled in fields
           const config = data.config as Record<string, string>
-          if (Object.values(config).some((v) => v !== '')) {
+          if (config && Object.values(config).some((v) => v !== '')) {
             payload.config = config
           }
           await mutation.mutateAsync(payload)
