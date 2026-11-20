@@ -9,8 +9,20 @@ logger = structlog.get_logger()
 
 _DATABASE_URL: str | None = os.getenv("DATABASE_URL")
 
+_DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "5"))
+_DB_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "10"))
+_DB_POOL_TIMEOUT = int(os.getenv("DB_POOL_TIMEOUT", "30"))
+_DB_POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE", "1800"))
+
 if _DATABASE_URL:
-    _engine = create_async_engine(_DATABASE_URL, pool_pre_ping=True)
+    _engine = create_async_engine(
+        _DATABASE_URL,
+        pool_pre_ping=True,
+        pool_size=_DB_POOL_SIZE,
+        max_overflow=_DB_MAX_OVERFLOW,
+        pool_timeout=_DB_POOL_TIMEOUT,
+        pool_recycle=_DB_POOL_RECYCLE,
+    )
     _session_factory: async_sessionmaker | None = async_sessionmaker(
         _engine, expire_on_commit=False
     )

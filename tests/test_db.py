@@ -35,3 +35,27 @@ async def test_get_db_raises_503_when_no_url():
             async for _ in db_module.get_db():
                 pass
         assert exc_info.value.status_code == 503
+
+
+def test_db_pool_settings_from_env():
+    """Pool limits from env vars are forwarded to create_async_engine."""
+    env = {
+        "DATABASE_URL": "postgresql+asyncpg://u:p@localhost/db",
+        "DB_POOL_SIZE": "8",
+        "DB_MAX_OVERFLOW": "4",
+        "DB_POOL_TIMEOUT": "15",
+        "DB_POOL_RECYCLE": "900",
+    }
+    with (
+        patch.dict(os.environ, env, clear=True),
+        patch("sqlalchemy.ext.asyncio.create_async_engine") as mock_create,
+    ):
+        import siphon.db as db_module
+        importlib.reload(db_module)
+        mock_create.assert_called_once()
+        _, kwargs = mock_create.call_args
+        assert kwargs["pool_pre_ping"] is True
+        assert kwargs["pool_size"] == 8
+        assert kwargs["max_overflow"] == 4
+        assert kwargs["pool_timeout"] == 15
+        assert kwargs["pool_recycle"] == 900

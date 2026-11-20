@@ -113,12 +113,13 @@ async def _run_job_async(
 
     from sqlalchemy import func, select
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
 
     from siphon import worker
     from siphon.orm import Connection, JobRun
 
     db_url = os.getenv("DATABASE_URL")
-    engine = create_async_engine(db_url, pool_pre_ping=True) if db_url else None
+    engine = create_async_engine(db_url, poolclass=NullPool) if db_url else None
     db_factory = async_sessionmaker(engine, expire_on_commit=False) if engine else None
 
     try:
@@ -285,11 +286,12 @@ async def _update_gdpr_event(event_id: str, result: dict) -> None:
     import uuid as uuid_mod
 
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
 
     from siphon.orm import GdprEvent
 
     db_url = os.environ["DATABASE_URL"]
-    engine = create_async_engine(db_url, pool_pre_ping=True)
+    engine = create_async_engine(db_url, poolclass=NullPool)
     db_factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with db_factory() as session:
