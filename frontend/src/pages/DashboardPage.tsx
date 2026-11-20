@@ -5,7 +5,6 @@ import {
   Activity,
   ArrowRight,
   ArrowUpRight,
-  Database,
   GitBranch,
   Layers,
   Loader2,
@@ -24,7 +23,7 @@ import { queryKeys } from '@/lib/queryKeys'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { StatusBadge } from '@/components/shared/StatusBadge'
 import { SchemaDriftBadge } from '@/components/shared/SchemaDriftBadge'
-import { EngineLogo, getConnectorMeta } from '@/components/connections/EngineLogo'
+import { EngineLogo } from '@/components/connections/EngineLogo'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -82,18 +81,7 @@ export function DashboardPage() {
   const connectionMap = new Map<string, Connection>(connectionList.map((c) => [c.id, c]))
 
   const activePipelines = pipelineList.filter((p) => p.is_active).length
-  const totalPipelines = pipelineList.length
-
-  const sourceConnections = connectionList.filter((c) => getConnectorMeta(c.type).role === 'source')
-  const destConnections = connectionList.filter((c) => getConnectorMeta(c.type).role === 'destination')
-
-  const totalRecentRuns = recentRuns.length
-  const successRuns = recentRuns.filter((r) => r.status === 'success').length
-  const failedRuns = recentRuns.filter((r) => r.status === 'failed').length
   const runningRuns = recentRuns.filter((r) => r.status === 'running').length
-
-  const successRate = totalRecentRuns > 0 ? Math.round((successRuns / totalRecentRuns) * 100) : null
-  const totalRowsIngested = recentRuns.reduce((acc, r) => acc + (r.rows_written ?? r.rows_read ?? 0), 0)
 
   // Filtered runs for the feed
   const filteredRuns = recentRuns.filter((r) => {
@@ -103,10 +91,25 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      {/* Top Header */}
+      {/* Top Header with Live Engine Status Badge */}
       <PageHeader
         title="Dashboard"
-        description="Ingestion telemetry, execution monitoring, and pipeline dispatch."
+        description="Data ingestion streams, execution telemetry, and pipeline dispatch."
+        breadcrumb={
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-secondary/60 border border-border/80 text-xs font-mono">
+            {runningRuns > 0 ? (
+              <>
+                <span className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
+                <span className="text-blue-500 font-semibold">{runningRuns} job{runningRuns > 1 ? 's' : ''} running</span>
+              </>
+            ) : (
+              <>
+                <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                <span className="text-muted-foreground">{activePipelines} active pipeline{activePipelines === 1 ? '' : 's'} · Engine Ready</span>
+              </>
+            )}
+          </div>
+        }
         action={
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={() => navigate('/connections/new')}>
@@ -121,103 +124,7 @@ export function DashboardPage() {
         }
       />
 
-      {/* Unified Telemetry Strip */}
-      <div className="bg-card border border-border/80 rounded-2xl shadow-apple-sm overflow-hidden">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-border/60">
-          {/* Segment 1: Pipelines */}
-          <div className="p-4 sm:p-5 flex flex-col justify-between">
-            <div className="flex items-center justify-between text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              <span>Active Pipelines</span>
-              <GitBranch className="h-3.5 w-3.5 text-muted-foreground/70" />
-            </div>
-            <div className="my-3">
-              <span className="text-3xl font-bold font-mono tracking-tight text-foreground tabular-nums">
-                {activePipelines}
-              </span>
-              <span className="text-xs text-muted-foreground font-mono ml-2">/ {totalPipelines} total</span>
-            </div>
-            <Link
-              to="/pipelines"
-              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors group"
-            >
-              <span>Manage pipelines</span>
-              <ArrowRight className="h-3 w-3 group-hover:translate-x-0.5 transition-transform" />
-            </Link>
-          </div>
-
-          {/* Segment 2: Volume */}
-          <div className="p-4 sm:p-5 flex flex-col justify-between">
-            <div className="flex items-center justify-between text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              <span>Recent Ingested Rows</span>
-              <Database className="h-3.5 w-3.5 text-muted-foreground/70" />
-            </div>
-            <div className="my-3">
-              <span className="text-3xl font-bold font-mono tracking-tight text-foreground tabular-nums">
-                {totalRowsIngested.toLocaleString()}
-              </span>
-            </div>
-            <span className="text-xs text-muted-foreground">Bronze Parquet records written</span>
-          </div>
-
-          {/* Segment 3: Success Rate */}
-          <div className="p-4 sm:p-5 flex flex-col justify-between">
-            <div className="flex items-center justify-between text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              <span>Success Rate</span>
-              <Activity className="h-3.5 w-3.5 text-muted-foreground/70" />
-            </div>
-            <div className="my-3 flex items-baseline gap-2">
-              <span
-                className={cn(
-                  'text-3xl font-bold font-mono tracking-tight tabular-nums',
-                  successRate === null
-                    ? 'text-muted-foreground'
-                    : successRate >= 90
-                      ? 'text-emerald-500'
-                      : successRate >= 70
-                        ? 'text-amber-500'
-                        : 'text-rose-500',
-                )}
-              >
-                {successRate !== null ? `${successRate}%` : '—'}
-              </span>
-              {runningRuns > 0 && (
-                <span className="text-xs font-mono text-blue-500">({runningRuns} running)</span>
-              )}
-            </div>
-            <span className="text-xs text-muted-foreground font-mono tabular-nums">
-              {successRuns} succeeded · {failedRuns} failed
-            </span>
-          </div>
-
-          {/* Segment 4: Storage */}
-          <div className="p-4 sm:p-5 flex flex-col justify-between">
-            <div className="flex items-center justify-between text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              <span>Storage Topology</span>
-              <Layers className="h-3.5 w-3.5 text-muted-foreground/70" />
-            </div>
-            <div className="my-3 flex items-baseline gap-2">
-              <span className="text-3xl font-bold font-mono tracking-tight text-foreground tabular-nums">
-                {sourceConnections.length}
-              </span>
-              <span className="text-xs text-muted-foreground">Sources</span>
-              <span className="text-muted-foreground/40 font-mono text-sm">→</span>
-              <span className="text-3xl font-bold font-mono tracking-tight text-foreground tabular-nums">
-                {destConnections.length}
-              </span>
-              <span className="text-xs text-muted-foreground">Dests</span>
-            </div>
-            <Link
-              to="/connections"
-              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors group"
-            >
-              <span>View connections</span>
-              <ArrowRight className="h-3 w-3 group-hover:translate-x-0.5 transition-transform" />
-            </Link>
-          </div>
-        </div>
-      </div>
-
-      {/* Main Split Layout: 65% Recent Runs / 35% Pipelines & Quick Actions */}
+      {/* Main Split Layout: 65% Ingestion Stream / 35% Pipelines & Quick Trigger */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Left Column (65% / 8 cols): Live Ingestion Stream */}
         <div className="lg:col-span-8 space-y-4">
@@ -279,7 +186,7 @@ export function DashboardPage() {
                       >
                         <div className="min-w-0 flex items-center gap-3.5">
                           {/* Engine Flow Logos */}
-                          {sourceConn ? (
+                          {sourceConn && (
                             <div className="flex items-center gap-1.5 shrink-0">
                               <EngineLogo type={sourceConn.type} name={sourceConn.name} size="sm" />
                               {destConn && (
@@ -288,10 +195,6 @@ export function DashboardPage() {
                                   <EngineLogo type={destConn.type} name={destConn.name} size="sm" />
                                 </>
                               )}
-                            </div>
-                          ) : (
-                            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-secondary border border-border/60 shrink-0">
-                              <Database className="h-3.5 w-3.5 text-muted-foreground" />
                             </div>
                           )}
 
@@ -359,7 +262,7 @@ export function DashboardPage() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between border-b border-border/60 py-3.5 px-5">
               <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                <GitBranch className="h-3.5 w-3.5" /> Quick Trigger Pipelines
+                <GitBranch className="h-3.5 w-3.5" /> Pipelines
               </CardTitle>
               <Link
                 to="/pipelines"
