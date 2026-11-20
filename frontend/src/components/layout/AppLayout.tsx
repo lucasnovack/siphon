@@ -1,6 +1,18 @@
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { Activity, Database, GitBranch, LayoutDashboard, LogOut, Settings, Users } from 'lucide-react'
+import {
+  Activity,
+  Database,
+  GitBranch,
+  LayoutDashboard,
+  LogOut,
+  Monitor,
+  Moon,
+  Settings,
+  Sun,
+  Users,
+} from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
+import { useTheme, type Theme } from '@/contexts/ThemeContext'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 
@@ -13,10 +25,18 @@ const navItems = [
 
 const settingsItems = [
   { to: '/settings/users', label: 'Users', icon: Users, adminOnly: true },
+  { to: '/settings/system', label: 'System', icon: Settings, adminOnly: false },
+]
+
+const themeOptions: { value: Theme; icon: typeof Sun; label: string }[] = [
+  { value: 'light', icon: Sun, label: 'Light theme' },
+  { value: 'system', icon: Monitor, label: 'System theme' },
+  { value: 'dark', icon: Moon, label: 'Dark theme' },
 ]
 
 export function AppLayout() {
   const { user, logout } = useAuth()
+  const { theme, setTheme } = useTheme()
   const navigate = useNavigate()
 
   async function handleLogout() {
@@ -25,80 +45,127 @@ export function AppLayout() {
   }
 
   return (
-    <div className="flex h-screen bg-background">
-      {/* Sidebar */}
-      <aside className="w-56 border-r flex flex-col shrink-0">
-        <div className="p-4 border-b">
-          <Link to="/" className="flex items-center gap-2 font-bold text-lg">
-            <span className="text-primary">⟂</span> Siphon
+    <div className="flex h-screen bg-background text-foreground">
+      {/* macOS-inspired translucent sidebar */}
+      <aside className="w-60 border-r border-border/70 bg-card/70 backdrop-blur-xl flex flex-col shrink-0 select-none">
+        {/* Brand header */}
+        <div className="h-14 px-4 flex items-center justify-between border-b border-border/60">
+          <Link to="/" className="flex items-center gap-2.5 group">
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-foreground text-sm font-bold shadow-apple-sm transition-transform duration-150 group-hover:scale-105">
+              ⟂
+            </span>
+            <span className="font-semibold text-sm tracking-tight">siphon</span>
           </Link>
+          <span className="text-[10px] font-medium text-muted-foreground/80 px-1.5 py-0.5 rounded-md bg-secondary/80 border border-border/60">
+            bronze
+          </span>
         </div>
 
-        <nav className="flex-1 p-2 space-y-1">
-          {navItems.map(({ to, label, icon: Icon, end }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={end}
-              className={({ isActive }) =>
-                cn(
-                  'flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors',
-                  isActive
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                )
-              }
-            >
-              <Icon className="h-4 w-4" />
-              {label}
-            </NavLink>
-          ))}
-
-          <div className="pt-4 border-t mt-4">
-            {settingsItems
-              .filter((item) => !item.adminOnly || user?.role === 'admin')
-              .map(({ to, label, icon: Icon }) => (
+        {/* Navigation groups */}
+        <nav className="flex-1 px-2.5 py-4 space-y-6 overflow-y-auto">
+          <div>
+            <div className="px-2.5 mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/75">
+              Workspace
+            </div>
+            <div className="space-y-0.5">
+              {navItems.map(({ to, label, icon: Icon, end }) => (
                 <NavLink
                   key={to}
                   to={to}
+                  end={end}
                   className={({ isActive }) =>
                     cn(
-                      'flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors',
+                      'flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs transition-all duration-150',
                       isActive
-                        ? 'bg-primary text-primary-foreground'
-                        : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                        ? 'bg-foreground/[0.08] text-foreground font-medium shadow-[inset_0_0_0_1px_hsl(var(--border)/0.7)]'
+                        : 'text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground',
                     )
                   }
                 >
-                  <Icon className="h-4 w-4" />
-                  {label}
+                  <Icon className="h-3.5 w-3.5 shrink-0" />
+                  <span>{label}</span>
                 </NavLink>
               ))}
-            <NavLink
-              to="/settings/system"
-              className={({ isActive }) =>
-                cn(
-                  'flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors',
-                  isActive
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                )
-              }
-            >
-              <Settings className="h-4 w-4" />
-              System
-            </NavLink>
+            </div>
+          </div>
+
+          <div>
+            <div className="px-2.5 mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/75">
+              Settings
+            </div>
+            <div className="space-y-0.5">
+              {settingsItems
+                .filter((item) => !item.adminOnly || user?.role === 'admin')
+                .map(({ to, label, icon: Icon }) => (
+                  <NavLink
+                    key={to}
+                    to={to}
+                    className={({ isActive }) =>
+                      cn(
+                        'flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs transition-all duration-150',
+                        isActive
+                          ? 'bg-foreground/[0.08] text-foreground font-medium shadow-[inset_0_0_0_1px_hsl(var(--border)/0.7)]'
+                          : 'text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground',
+                      )
+                    }
+                  >
+                    <Icon className="h-3.5 w-3.5 shrink-0" />
+                    <span>{label}</span>
+                  </NavLink>
+                ))}
+            </div>
           </div>
         </nav>
 
-        <div className="p-4 border-t">
-          <div className="flex items-center justify-between">
-            <div className="text-sm">
-              <div className="font-medium truncate max-w-[120px]">{user?.name ?? user?.email}</div>
-              <div className="text-xs text-muted-foreground capitalize">{user?.role}</div>
+        {/* Footer: theme switcher + user */}
+        <div className="p-3 border-t border-border/60 space-y-3">
+          {/* Apple-style segmented theme control */}
+          <div
+            role="group"
+            aria-label="Theme"
+            className="grid grid-cols-3 gap-0.5 p-0.5 rounded-lg bg-secondary/80 border border-border/60"
+          >
+            {themeOptions.map(({ value, icon: Icon, label }) => {
+              const active = theme === value
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setTheme(value)}
+                  aria-label={label}
+                  aria-pressed={active}
+                  title={label}
+                  className={cn(
+                    'flex items-center justify-center h-7 rounded-md transition-all duration-150',
+                    active
+                      ? 'bg-card text-foreground shadow-apple-sm'
+                      : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                </button>
+              )
+            })}
+          </div>
+
+          <div className="flex items-center justify-between px-1">
+            <div className="min-w-0">
+              <div className="text-xs font-medium truncate max-w-[140px]">
+                {user?.name ?? user?.email}
+              </div>
+              <div className="text-[10.5px] text-muted-foreground capitalize">
+                {user?.role}
+              </div>
             </div>
-            <Button variant="ghost" size="icon" onClick={handleLogout} title="Logout">
-              <LogOut className="h-4 w-4" />
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={handleLogout}
+              title="Sign out"
+              aria-label="Sign out"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <LogOut className="h-3.5 w-3.5" />
             </Button>
           </div>
         </div>
@@ -106,7 +173,7 @@ export function AppLayout() {
 
       {/* Main content */}
       <main className="flex-1 overflow-auto">
-        <div className="container max-w-6xl py-8 px-6">
+        <div className="mx-auto max-w-6xl py-8 px-8">
           <Outlet />
         </div>
       </main>
