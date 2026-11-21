@@ -5,12 +5,12 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql+asyncpg://siphon:siphon@postgres:5432/siphon}
       SIPHON_JWT_SECRET: ${SIPHON_JWT_SECRET}
       SIPHON_ENCRYPTION_KEY: ${SIPHON_ENCRYPTION_KEY}
       SIPHON_ADMIN_EMAIL: ${SIPHON_ADMIN_EMAIL}
       SIPHON_ADMIN_PASSWORD: ${SIPHON_ADMIN_PASSWORD}
-      REDIS_URL: ${REDIS_URL}
+      REDIS_URL: ${DOCKER_REDIS_URL:-redis://redis:6379/0}
       SIPHON_PORT: ${SIPHON_PORT}
       SIPHON_MAX_WORKERS: ${SIPHON_MAX_WORKERS}
       SIPHON_ALLOWED_S3_PREFIX: ${SIPHON_ALLOWED_S3_PREFIX}
@@ -50,13 +50,13 @@ services:
       --without-gossip
       --without-mingle
     environment:
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql+asyncpg://siphon:siphon@postgres:5432/siphon}
       SIPHON_ENCRYPTION_KEY: ${SIPHON_ENCRYPTION_KEY}
       SIPHON_ALLOWED_S3_PREFIX: ${SIPHON_ALLOWED_S3_PREFIX}
       SIPHON_S3_SCHEME: ${SIPHON_S3_SCHEME}
       SIPHON_ALLOWED_HOSTS: ${SIPHON_ALLOWED_HOSTS:-}
       SIPHON_DEV_MODE: ${SIPHON_DEV_MODE:-false}
-      REDIS_URL: ${REDIS_URL}
+      REDIS_URL: ${DOCKER_REDIS_URL:-redis://redis:6379/0}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -81,7 +81,7 @@ services:
     environment:
       SIPHON_ALLOWED_HOSTS: ${SIPHON_ALLOWED_HOSTS:-}
       SIPHON_DEV_MODE: ${SIPHON_DEV_MODE:-false}
-      REDIS_URL: ${REDIS_URL}
+      REDIS_URL: ${DOCKER_REDIS_URL:-redis://redis:6379/0}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
