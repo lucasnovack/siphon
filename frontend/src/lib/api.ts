@@ -85,7 +85,7 @@ export interface ListEnvelope<T> {
 export interface Connection {
   id: string
   name: string
-  type: 'sql' | 'sftp' | 's3_parquet' | 'gcs_parquet'
+  type: 'sql' | 'sftp' | 's3_parquet' | 'gcs_parquet' | 'local_parquet'
   key_version: number
   max_concurrent_jobs?: number
   created_at: string

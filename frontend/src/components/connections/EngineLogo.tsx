@@ -100,6 +100,17 @@ export function getConnectorMeta(type: string, connectionName = ''): ConnectorMe
         protocolHint: 'gs://bronze/dataset/',
         dialect: 'generic',
       }
+    case 'local_parquet':
+      return {
+        type: 'local_parquet',
+        role: 'destination',
+        title: 'Local Filesystem',
+        engineName: 'Local Disk / Storage',
+        formatBadge: 'Parquet',
+        summary: 'Direct write to local host directory or mounted storage',
+        protocolHint: 'file:///data/lake/ or ./data/lake/',
+        dialect: 'generic',
+      }
     default:
       return {
         type: 'sql',
@@ -148,6 +159,7 @@ export function EngineLogo({ type, name = '', size = 'md', className }: EngineLo
       {type === 'sftp' && <SftpBrandLogo className={iconSizes[size]} />}
       {type === 's3_parquet' && <S3BrandLogo name={name} className={iconSizes[size]} />}
       {type === 'gcs_parquet' && <GcsBrandLogo className={iconSizes[size]} />}
+      {type === 'local_parquet' && <LocalDiskBrandLogo className={iconSizes[size]} />}
     </div>
   )
 }
@@ -400,6 +412,28 @@ function SftpBrandLogo({ className }: { className?: string }) {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+    </svg>
+  )
+}
+
+function LocalDiskBrandLogo({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <rect
+        x="3"
+        y="4"
+        width="18"
+        height="16"
+        rx="2.5"
+        fill="#10B981"
+        fillOpacity="0.16"
+        stroke="#10B981"
+        strokeWidth="1.6"
+      />
+      <line x1="3" y1="13" x2="21" y2="13" stroke="#10B981" strokeWidth="1.5" />
+      <circle cx="17.5" cy="16.5" r="1.2" fill="#10B981" />
+      <circle cx="14" cy="16.5" r="1.2" fill="#10B981" />
+      <rect x="6" y="7" width="5" height="3" rx="1" fill="#10B981" fillOpacity="0.4" />
     </svg>
   )
 }

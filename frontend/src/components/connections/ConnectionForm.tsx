@@ -208,7 +208,9 @@ export function ConnectionForm({
                       ? 'gcs_bronze_lake'
                       : selectedType === 's3_parquet'
                         ? 'minio_bronze_dest'
-                        : 'sftp_partner_source'
+                        : selectedType === 'local_parquet'
+                          ? 'local_disk_dest'
+                          : 'sftp_partner_source'
                 }
                 {...register('name')}
               />

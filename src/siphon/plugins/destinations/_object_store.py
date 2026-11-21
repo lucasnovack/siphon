@@ -158,6 +158,12 @@ class ObjectStoreParquetDestination(Destination):
             if info.type == pafs.FileType.File:
                 rel_path = info.path[len(staging):].lstrip("/")
                 dest_file = f"{root}/{rel_path}"
+                dest_dir = "/".join(dest_file.split("/")[:-1])
+                if dest_dir:
+                    try:
+                        fs.create_dir(dest_dir, recursive=True)
+                    except Exception:
+                        pass
                 fs.copy_file(info.path, dest_file)
                 promoted += 1
         fs.delete_dir(staging)

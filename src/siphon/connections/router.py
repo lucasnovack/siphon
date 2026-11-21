@@ -21,7 +21,7 @@ from siphon.plugins.sources.sql import _validate_host
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/api/v1/connections", tags=["connections"])
 
-ConnType = Literal["sql", "sftp", "s3_parquet", "gcs_parquet"]
+ConnType = Literal["sql", "sftp", "s3_parquet", "gcs_parquet", "local_parquet"]
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
 
@@ -256,6 +256,15 @@ def _test_connection(conn_type: str, config: dict) -> None:
         else:
             fs.get_file_info(pafs.FileSelector("/", recursive=False))
 
+    elif conn_type == "local_parquet":
+        import os
+        base_path = config.get("base_path", "/tmp") or "/tmp"
+        os.makedirs(base_path, exist_ok=True)
+        probe_file = os.path.join(base_path, f".siphon_probe_{uuid.uuid4().hex}")
+        with open(probe_file, "w") as f:
+            f.write("probe")
+        os.remove(probe_file)
+
     else:
         raise ValueError(f"Unknown connection type: {conn_type!r}")
 
@@ -368,6 +377,20 @@ _CONNECTION_TYPES = [
                 "type": "string",
                 "label": "Endpoint Override (optional, e.g. fake-gcs-server)",
                 "placeholder": "localhost:4443",
+            },
+        ],
+    },
+    {
+        "type": "local_parquet",
+        "label": "Local Filesystem",
+        "fields": [
+            {
+                "name": "base_path",
+                "type": "string",
+                "label": "Base Directory",
+                "placeholder": "/data/lake or ./data",
+                "default": "/data",
+                "required": False,
             },
         ],
     },

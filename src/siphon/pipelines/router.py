@@ -430,7 +430,7 @@ async def trigger_pipeline(
 
     if src_conn.conn_type != "sql":
         raise HTTPException(400, f"Unsupported source connection type: {src_conn.conn_type!r}")
-    if dest_conn.conn_type not in ("s3_parquet", "gcs_parquet"):
+    if dest_conn.conn_type not in ("s3_parquet", "gcs_parquet", "local_parquet"):
         raise HTTPException(400, f"Unsupported destination connection type: {dest_conn.conn_type!r}")
 
     from datetime import date

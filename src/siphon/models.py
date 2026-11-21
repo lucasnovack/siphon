@@ -116,6 +116,18 @@ class GCSParquetDestinationConfig(BaseModel):
         )
 
 
+class LocalParquetDestinationConfig(BaseModel):
+    type: Literal["local_parquet"]
+    path: str
+    base_path: str = ""
+    compression: str = "snappy"
+    extraction_mode: Literal["full_refresh", "incremental"] = "full_refresh"
+    partition_by: Literal["none", "ingest_date"] = "none"
+
+    def __repr__(self) -> str:
+        return f"LocalParquetDestinationConfig(path={self.path!r}, base_path={self.base_path!r})"
+
+
 def build_destination_payload(
     dest_type: str,
     dest_config: dict,
@@ -153,6 +165,15 @@ def build_destination_payload(
             if val not in (None, ""):
                 payload[opt_key] = val
         return payload
+    if dest_type == "local_parquet":
+        return {
+            "type": "local_parquet",
+            "path": dest_path,
+            "base_path": dest_config.get("base_path") or "",
+            "compression": dest_config.get("compression") or "snappy",
+            "extraction_mode": extraction_mode,
+            "partition_by": partition_by or "none",
+        }
     raise ValueError(f"Unsupported destination connection type: {dest_type!r}")
 
 
@@ -164,7 +185,7 @@ SourceConfig = Annotated[
 ]
 
 DestinationConfig = Annotated[
-    S3ParquetDestinationConfig | GCSParquetDestinationConfig,
+    S3ParquetDestinationConfig | GCSParquetDestinationConfig | LocalParquetDestinationConfig,
     Field(discriminator="type"),
 ]
 
