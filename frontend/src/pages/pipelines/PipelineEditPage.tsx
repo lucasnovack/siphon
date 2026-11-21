@@ -177,14 +177,14 @@ export function PipelineEditPage() {
               <ConnectionSelect
                 value={watch('dest_connection_id')}
                 onChange={(v) => setValue('dest_connection_id', v)}
-                filterType={['s3_parquet', 'gcs_parquet']}
+                filterType={['s3_parquet', 'gcs_parquet', 'local_parquet']}
               />
               {errors.dest_connection_id && <p className="text-xs text-destructive">{errors.dest_connection_id.message}</p>}
             </div>
 
             <div className="space-y-2">
               <Label htmlFor="destination_path">Destination Path / Prefix</Label>
-              <Input id="destination_path" placeholder="bronze/my-table/ (or gs://bronze/my-table/)" {...register('destination_path')} />
+              <Input id="destination_path" placeholder="bronze/my-table/ (or gs://... or /data/lake)" {...register('destination_path')} />
               {errors.destination_path && <p className="text-xs text-destructive">{errors.destination_path.message}</p>}
             </div>
 

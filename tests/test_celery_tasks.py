@@ -97,9 +97,8 @@ def test_run_pipeline_task_is_registered():
     assert "siphon.tasks.run_pipeline_task" in app.tasks
 
 
-def test_celery_queue_submit_calls_apply_async():
+async def test_celery_queue_submit_calls_apply_async():
     """JobQueue.submit() must call run_pipeline_task.apply_async() with correct queue."""
-    import asyncio
     from unittest.mock import MagicMock, patch
 
     from siphon.models import Job
@@ -110,9 +109,7 @@ def test_celery_queue_submit_calls_apply_async():
     with patch("siphon.queue.run_pipeline_task") as mock_task:
         mock_task.apply_async = MagicMock(side_effect=lambda *a, **kw: applied.append(kw))
         q = JobQueue()
-        asyncio.get_event_loop().run_until_complete(
-            q.submit(Job(job_id="j-1", priority="high"), {}, {})
-        )
+        await q.submit(Job(job_id="j-1", priority="high"), {}, {})
 
     assert len(applied) == 1
     assert applied[0]["queue"] == "high"
@@ -252,7 +249,7 @@ async def test_run_job_async_uses_nullpool_and_redis_semaphore():
         "REDIS_URL": "redis://localhost:6379/0",
     }
     with (
-        patch.dict("os.environ", env, clear=True),
+        patch.dict("os.environ", env),
         patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=mock_engine) as mock_create,
         patch("sqlalchemy.ext.asyncio.async_sessionmaker", return_value=mock_factory),
         patch("siphon.concurrency.acquire_connection_slot", return_value=(True, 1)) as mock_acq,
@@ -293,7 +290,7 @@ async def test_run_job_async_raises_on_redis_concurrency_limit():
         "REDIS_URL": "redis://localhost:6379/0",
     }
     with (
-        patch.dict("os.environ", env, clear=True),
+        patch.dict("os.environ", env),
         patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=mock_engine),
         patch("sqlalchemy.ext.asyncio.async_sessionmaker", return_value=mock_factory),
         patch("siphon.concurrency.acquire_connection_slot", return_value=(False, 2)),

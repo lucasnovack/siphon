@@ -30,15 +30,15 @@ def _count_s3_files(
     partition_filter: str | None,
     dest_config: dict | None = None,
 ) -> int:
-    """Count Parquet files matching the path + filter (S3 or GCS). Used to decide sync vs async purge."""
+    """Count Parquet files matching the path + filter (S3, GCS, or Local). Used to decide sync vs async purge."""
     import pyarrow.fs as pafs
 
-    from siphon.tasks import _build_purge_fs
+    from siphon.tasks import _build_purge_fs, _resolve_purge_path
 
     try:
         fs, _ = _build_purge_fs(base_path, dest_config)
-        bucket_path = base_path.removeprefix("s3a://").removeprefix("s3://").removeprefix("gs://")
-        file_info = fs.get_file_info(pafs.FileSelector(bucket_path, recursive=True))
+        target_path = _resolve_purge_path(base_path, dest_config)
+        file_info = fs.get_file_info(pafs.FileSelector(target_path, recursive=True))
         files = [f for f in file_info if f.is_file and f.path.endswith(".parquet")]
         if partition_filter:
             files = [f for f in files if partition_filter in f.path]

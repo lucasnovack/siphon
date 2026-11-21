@@ -341,7 +341,11 @@ async def _persist_job_run(job: Job, db_factory) -> None:
                 logs=list(job.logs),
                 created_at=datetime.now(tz=UTC),
             )
-            session.add(run)
+            import inspect
+
+            add_res = session.add(run)
+            if inspect.isawaitable(add_res):
+                await add_res
             await session.commit()
             if hasattr(session, "refresh"):
                 try:
@@ -557,6 +561,8 @@ async def _run_job_inner(
                 await loop.run_in_executor(executor, destination.promote)
                 job.logs.append("Staging promotion complete")
             except Exception as exc:
+                job.status = "failed"
+                job.error = f"Staging promote failed: {exc}"
                 job.logs.append(f"ERROR: Staging promote failed: {exc}")
                 logger.error("staging_promote_failed", error=str(exc))
         if db_factory is not None:

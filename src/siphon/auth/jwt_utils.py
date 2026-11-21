@@ -9,7 +9,7 @@ import jwt as pyjwt
 import structlog as _structlog
 from passlib.context import CryptContext
 
-_JWT_SECRET_DEFAULT = "dev-secret-change-in-production"
+_JWT_SECRET_DEFAULT = "dev-secret-change-in-production-min32b"
 _JWT_SECRET: str = os.getenv("SIPHON_JWT_SECRET", _JWT_SECRET_DEFAULT)
 _DEV_MODE = os.getenv("SIPHON_DEV_MODE", "false").lower() == "true"
 

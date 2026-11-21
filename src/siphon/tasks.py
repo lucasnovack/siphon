@@ -207,14 +207,52 @@ async def _run_job_async(
             await engine.dispose()
 
 
+def _resolve_purge_path(path: str, dest_config: dict | None = None) -> str:
+    """Normalize and resolve bucket or filesystem path for purge operations."""
+    import os
+
+    cfg = dest_config or {}
+    clean = (
+        path.removeprefix("s3a://")
+        .removeprefix("s3://")
+        .removeprefix("gs://")
+        .removeprefix("file://")
+        .removeprefix("local://")
+    )
+    is_local = (
+        cfg.get("type") == "local_parquet"
+        or path.startswith(("file://", "local://"))
+        or (not path.startswith(("s3://", "s3a://", "gs://")) and os.path.isabs(clean))
+    )
+    if is_local:
+        base_dir = cfg.get("base_path")
+        if base_dir and not os.path.isabs(clean):
+            base_dir_clean = (
+                base_dir.removeprefix("file://").removeprefix("local://")
+            )
+            clean = os.path.join(base_dir_clean, clean)
+        return os.path.normpath(clean)
+    return clean
+
+
 def _build_purge_fs(base_path: str, dest_config: dict | None = None):
-    """Build a PyArrow FileSystem and scheme prefix for S3 or GCS purge operations."""
+    """Build a PyArrow FileSystem and scheme prefix for S3, GCS, or Local purge operations."""
     import os
 
     import pyarrow.fs as pafs
 
     cfg = dest_config or {}
-    is_gcs = base_path.startswith("gs://") or cfg.get("type") == "gcs_parquet"
+    conn_type = cfg.get("type")
+
+    is_local = (
+        conn_type == "local_parquet"
+        or base_path.startswith(("file://", "local://"))
+        or (not base_path.startswith(("s3://", "s3a://", "gs://")) and os.path.isabs(base_path))
+    )
+    if is_local:
+        return pafs.LocalFileSystem(), ""
+
+    is_gcs = base_path.startswith("gs://") or conn_type == "gcs_parquet"
     if is_gcs:
         from siphon.plugins.destinations.gcs_auth import build_gcs_filesystem
 
@@ -252,10 +290,10 @@ def _purge_s3_files(
     delete_fn=None,
     dest_config: dict | None = None,
 ) -> dict:
-    """List and delete Parquet files under base_path (S3 or GCS) matching filters.
+    """List and delete Parquet files under base_path (S3, GCS, or Local) matching filters.
 
     list_fn and delete_fn are injectable for testing. In production they use
-    PyArrow S3FileSystem or GcsFileSystem depending on the path scheme.
+    PyArrow S3FileSystem, GcsFileSystem, or LocalFileSystem depending on configuration.
     """
     if list_fn is None or delete_fn is None:
         import pyarrow.fs as pafs
@@ -264,17 +302,17 @@ def _purge_s3_files(
 
         if list_fn is None:
             def list_fn(path):
-                bucket_path = path.removeprefix("s3a://").removeprefix("s3://").removeprefix("gs://")
-                file_info = fs.get_file_info(pafs.FileSelector(bucket_path, recursive=True))
+                target_path = _resolve_purge_path(path, dest_config)
+                file_info = fs.get_file_info(pafs.FileSelector(target_path, recursive=True))
                 return [
-                    scheme_prefix + f.path
+                    (scheme_prefix + f.path) if scheme_prefix else f.path
                     for f in file_info
                     if f.is_file and f.path.endswith(".parquet")
                 ]
 
         if delete_fn is None:
             def delete_fn(path):
-                key = path.removeprefix("s3a://").removeprefix("s3://").removeprefix("gs://")
+                key = _resolve_purge_path(path, dest_config)
                 info = fs.get_file_info(key)
                 size = info.size or 0
                 fs.delete_file(key)

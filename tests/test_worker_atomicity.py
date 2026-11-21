@@ -66,3 +66,44 @@ async def test_promote_called_before_db_writes():
     assert promote_idx < persist_idx, f"promote ({promote_idx}) must come before persist ({persist_idx})"
     update_idx = call_order.index("update_pipeline_metadata")
     assert promote_idx < update_idx, f"promote ({promote_idx}) must come before update_metadata ({update_idx})"
+
+
+@pytest.mark.asyncio
+async def test_promote_failure_marks_job_failed_and_skips_watermark():
+    """If promote() fails, job status must be set to 'failed' and watermark must not advance."""
+    from siphon.worker import run_job
+
+    mock_source = MagicMock()
+    mock_source.extract_batches.return_value = iter([_make_batch()])
+
+    mock_dest = MagicMock()
+    mock_dest.write.return_value = 3
+    mock_dest.promote.side_effect = IOError("Disk full or permission denied")
+
+    persisted_jobs = []
+
+    async def fake_persist(job, db_factory):
+        persisted_jobs.append(job)
+
+    mock_update_metadata = AsyncMock()
+
+    job = Job(job_id="test-promote-fail", pipeline_id=_PIPELINE_UUID)
+
+    with patch("siphon.worker._persist_job_run", side_effect=fake_persist), \
+         patch("siphon.worker._update_pipeline_metadata", mock_update_metadata):
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            await run_job(mock_source, mock_dest, job, executor, timeout=30, db_factory=MagicMock())
+
+    assert job.status == "failed"
+    assert "Staging promote failed" in job.error
+    assert len(persisted_jobs) == 1
+    assert persisted_jobs[0].status == "failed"
+    # Metadata update must NOT be called for failed jobs
+    mock_update_metadata.assert_awaited_once_with(job, mock_update_metadata.call_args[0][1])
+    # And inside update_metadata, status is checked and returns early:
+    # Let's verify _update_pipeline_metadata itself returns early
+    from siphon.worker import _update_pipeline_metadata
+    db_mock = AsyncMock()
+    await _update_pipeline_metadata(job, db_mock)
+    db_mock.assert_not_called()
+

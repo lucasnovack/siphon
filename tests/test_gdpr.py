@@ -171,3 +171,39 @@ def test_purge_gcs_path_uses_gcs_filesystem_and_filters_by_date():
     assert mock_build.call_args.kwargs["project_id"] == "gcp-proj"
     mock_fs.delete_file.assert_called_once_with("bronze/orders/_date=2025-01-10/part-0.parquet")
     assert result == {"files_deleted": 1, "bytes_deleted": 512}
+
+
+def test_purge_local_parquet_path_deletes_files(tmp_path):
+    """_purge_s3_files must support local_parquet destinations using LocalFileSystem."""
+    from datetime import date as date_type
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from siphon.tasks import _purge_s3_files
+
+    table = pa.table({"id": [1, 2, 3]})
+    dest_dir = tmp_path / "lake" / "orders"
+    old_part = dest_dir / "_date=2025-01-10"
+    new_part = dest_dir / "_date=2026-11-20"
+    old_part.mkdir(parents=True)
+    new_part.mkdir(parents=True)
+
+    f_old = old_part / "part-0.parquet"
+    f_new = new_part / "part-0.parquet"
+    pq.write_table(table, f_old)
+    pq.write_table(table, f_new)
+
+    assert f_old.exists()
+    assert f_new.exists()
+
+    result = _purge_s3_files(
+        base_path="orders",
+        before_date=date_type(2026, 1, 1),
+        partition_filter=None,
+        dest_config={"type": "local_parquet", "base_path": str(tmp_path / "lake")},
+    )
+
+    assert result["files_deleted"] == 1
+    assert result["bytes_deleted"] > 0
+    assert not f_old.exists()
+    assert f_new.exists()
+
