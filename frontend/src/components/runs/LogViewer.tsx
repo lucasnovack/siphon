@@ -217,7 +217,7 @@ export function LogViewer({ runId, status, className }: LogViewerProps) {
       {/* Console Top Toolbar */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 px-4 py-2.5 bg-zinc-900/90 border-b border-zinc-800/80">
         <div className="flex items-center gap-2">
-          {/* macOS styled window dots */}
+          {/* Console window controls */}
           <div className="flex items-center gap-1.5 mr-2">
             <div className="h-2.5 w-2.5 rounded-full bg-red-500/80" />
             <div className="h-2.5 w-2.5 rounded-full bg-amber-500/80" />

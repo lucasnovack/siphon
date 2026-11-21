@@ -46,7 +46,7 @@ export function AppLayout() {
 
   return (
     <div className="flex h-screen bg-background text-foreground">
-      {/* macOS-inspired translucent sidebar */}
+      {/* Modern translucent sidebar */}
       <aside className="w-64 border-r border-border/70 bg-card/70 backdrop-blur-xl flex flex-col shrink-0 select-none">
         {/* Brand header */}
         <div className="h-14 px-5 flex items-center justify-between border-b border-border/60">

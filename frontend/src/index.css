@@ -71,7 +71,7 @@
     @apply bg-background text-foreground font-sans text-[15px] leading-normal selection:bg-foreground/15 selection:text-foreground;
   }
 
-  /* Subtle macOS-style scrollbars */
+  /* Subtle minimal scrollbars */
   ::-webkit-scrollbar {
     width: 7px;
     height: 7px;
