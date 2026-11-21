@@ -12,7 +12,6 @@ import {
   Layers,
   Play,
   RotateCcw,
-  Sparkles,
 } from 'lucide-react'
 import { runsApi, pipelinesApi, connectionsApi, type Connection } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
@@ -302,7 +301,7 @@ export function RunDetailPage() {
                 </>
               ) : (
                 <>
-                  <Sparkles className="h-3 w-3 text-blue-500" />
+                  <span className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
                   <span className="capitalize">{run.status}</span>
                 </>
               )}

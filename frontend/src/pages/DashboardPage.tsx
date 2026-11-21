@@ -80,9 +80,6 @@ export function DashboardPage() {
   const pipelineMap = new Map<string, Pipeline>(pipelineList.map((p) => [p.id, p]))
   const connectionMap = new Map<string, Connection>(connectionList.map((c) => [c.id, c]))
 
-  const activePipelines = pipelineList.filter((p) => p.is_active).length
-  const runningRuns = recentRuns.filter((r) => r.status === 'running').length
-
   // Filtered runs for the feed
   const filteredRuns = recentRuns.filter((r) => {
     if (statusFilter === 'all') return true
@@ -91,25 +88,9 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      {/* Top Header with Live Engine Status Badge */}
       <PageHeader
         title="Dashboard"
-        description="Data ingestion streams, execution telemetry, and pipeline dispatch."
-        breadcrumb={
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-secondary/60 border border-border/80 text-xs font-mono">
-            {runningRuns > 0 ? (
-              <>
-                <span className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
-                <span className="text-blue-500 font-semibold">{runningRuns} job{runningRuns > 1 ? 's' : ''} running</span>
-              </>
-            ) : (
-              <>
-                <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                <span className="text-muted-foreground">{activePipelines} active pipeline{activePipelines === 1 ? '' : 's'} · Engine Ready</span>
-              </>
-            )}
-          </div>
-        }
+        description="Overview of pipelines, runs, and sync activity."
         action={
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={() => navigate('/connections/new')}>

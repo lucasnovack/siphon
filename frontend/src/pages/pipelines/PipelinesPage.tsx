@@ -12,7 +12,6 @@ import {
   Plus,
   RefreshCw,
   Search,
-  Sparkles,
   Trash2,
   X,
   Layers,
@@ -430,14 +429,7 @@ export function PipelinesPage() {
                               : 'bg-secondary text-foreground'
                           )}
                         >
-                          {pipeline.extraction_mode === 'incremental' ? (
-                            <span className="flex items-center gap-1">
-                              <Sparkles className="h-2.5 w-2.5" />
-                              Incremental
-                            </span>
-                          ) : (
-                            'Full Refresh'
-                          )}
+                          {pipeline.extraction_mode === 'incremental' ? 'Incremental' : 'Full Refresh'}
                         </Badge>
 
                         {pipeline.partition_by === 'ingest_date' && (

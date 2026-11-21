@@ -13,7 +13,6 @@ import {
   Play,
   RefreshCw,
   ShieldCheck,
-  Sparkles,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { pipelinesApi, connectionsApi, type Connection } from '@/lib/api'
@@ -299,10 +298,7 @@ export function PipelineDetailPage() {
             </div>
             <div className="text-sm font-semibold text-foreground flex items-center gap-1.5 pt-1 truncate">
               {isIncremental ? (
-                <>
-                  <Sparkles className="h-3.5 w-3.5 text-blue-500 shrink-0" />
-                  <span className="font-mono">{pipeline.incremental_key}</span>
-                </>
+                <span className="font-mono">{pipeline.incremental_key}</span>
               ) : (
                 <span className="text-muted-foreground">Full snapshot</span>
               )}
