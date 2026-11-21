@@ -16,6 +16,7 @@ import {
   Trash2,
   X,
   Layers,
+  History,
 } from 'lucide-react'
 import {
   pipelinesApi,
@@ -30,6 +31,7 @@ import { StatusBadge } from '@/components/shared/StatusBadge'
 import { EngineLogo } from '@/components/connections/EngineLogo'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { ConfirmDialog } from '@/components/shared/ConfirmDialog'
+import { BackfillDialog } from '@/components/pipelines/BackfillDialog'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -504,6 +506,25 @@ export function PipelinesPage() {
                         )}
                         Run
                       </Button>
+
+                      {/* Quick Backfill (Incremental only) */}
+                      {pipeline.extraction_mode === 'incremental' && (
+                        <div onClick={(e) => e.stopPropagation()}>
+                          <BackfillDialog
+                            pipeline={pipeline}
+                            trigger={
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-muted-foreground hover:text-foreground hidden sm:inline-flex"
+                                title="Historical Backfill"
+                              >
+                                <History className="h-3.5 w-3.5" />
+                              </Button>
+                            }
+                          />
+                        </div>
+                      )}
 
                       {/* Quick Edit */}
                       <Button

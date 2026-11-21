@@ -154,7 +154,7 @@ export interface JobRun {
   source_connection_id?: string | null
   destination_path?: string | null
   schedule_id?: string | null
-  triggered_by: 'schedule' | 'manual' | 'api'
+  triggered_by: 'schedule' | 'manual' | 'api' | 'backfill'
   status: 'queued' | 'running' | 'success' | 'failed' | 'partial_success'
   rows_read: number | null
   rows_written: number | null
