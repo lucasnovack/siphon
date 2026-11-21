@@ -1,6 +1,6 @@
 interface PageHeaderProps {
   title: string
-  description?: string
+  description?: React.ReactNode
   action?: React.ReactNode
   breadcrumb?: React.ReactNode
 }
@@ -11,7 +11,7 @@ export function PageHeader({ title, description, action, breadcrumb }: PageHeade
       <div className="space-y-1">
         {breadcrumb && <div className="text-[11px] text-muted-foreground mb-1.5">{breadcrumb}</div>}
         <h1 className="text-2xl font-bold tracking-tight text-foreground">{title}</h1>
-        {description && <p className="text-sm text-muted-foreground">{description}</p>}
+        {description && <div className="text-sm text-muted-foreground">{description}</div>}
       </div>
       {action && <div className="shrink-0">{action}</div>}
     </div>

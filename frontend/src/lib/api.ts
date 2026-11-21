@@ -151,11 +151,14 @@ export interface Schedule {
 export interface JobRun {
   id: string
   pipeline_id: string | null
-  schedule_id: string | null
+  source_connection_id?: string | null
+  destination_path?: string | null
+  schedule_id?: string | null
   triggered_by: 'schedule' | 'manual' | 'api'
   status: 'queued' | 'running' | 'success' | 'failed' | 'partial_success'
   rows_read: number | null
   rows_written: number | null
+  duration_ms?: number | null
   error: string | null
   schema_hash: string | null
   schema_changed: boolean
