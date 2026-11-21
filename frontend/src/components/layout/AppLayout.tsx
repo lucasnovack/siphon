@@ -56,8 +56,8 @@ export function AppLayout() {
             </span>
             <span className="font-semibold text-base tracking-tight">siphon</span>
           </Link>
-          <span className="text-[11px] font-medium text-muted-foreground/80 px-2 py-0.5 rounded-md bg-secondary/80 border border-border/60 font-mono">
-            bronze
+          <span className="text-[11px] font-medium text-muted-foreground/75 px-1.5 py-0.5 rounded-md bg-secondary/60 border border-border/50 font-mono">
+            v0.1.0
           </span>
         </div>
 
